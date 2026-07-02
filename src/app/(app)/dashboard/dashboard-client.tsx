@@ -1,0 +1,718 @@
+"use client";
+
+import React, { useCallback, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { getDashboardData } from "./actions";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  AlertTriangle,
+  BarChart3,
+  ChevronDown,
+  ChevronRight,
+  DollarSign,
+  LineChart,
+  Percent,
+  Target,
+  TrendingUp,
+  Users2,
+} from "lucide-react";
+
+type MetricSet = {
+  targetRevenue: number;
+  targetGp: number;
+  forecastRevenue: number;
+  forecastGp: number;
+  backlogRevenue: number;
+  backlogGp: number;
+  targetGpPercent: number;
+  forecastGpPercent: number;
+  backlogGpPercent: number;
+  revenueAchievement: number;
+  gpAchievement: number;
+};
+
+type DashboardData = {
+  currentContext: {
+    fiscalYear: number;
+    quarter: number;
+    weekInQuarter: number;
+  };
+  selectedFiscalYear: number;
+  selectedQuarters: number[];
+  user: {
+    role?: string | null;
+    name?: string | null;
+  };
+  current: MetricSet;
+  yearly: MetricSet;
+  managers: Array<{
+    id: string;
+    managerName: string;
+    current: MetricSet;
+    yearly: MetricSet;
+    forecastedCount: number;
+    targetCount: number;
+    vendors: Array<{
+      vendorId: string;
+      vendorName: string;
+      current: MetricSet;
+      yearly: MetricSet;
+      hasForecast: boolean;
+      hasTarget: boolean;
+    }>;
+  }>;
+  attentionItems: Array<{
+    type: string;
+    severity: string;
+    managerName: string;
+    vendorName: string;
+    detail: string;
+  }>;
+  quarterlySummary: Array<MetricSet & { quarter: number }>;
+};
+
+interface DashboardClientProps {
+  data: DashboardData;
+}
+
+function formatUSD(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function formatPercent(value: number) {
+  return `${value.toFixed(1)}%`;
+}
+
+function getAchievementTone(value: number) {
+  if (value >= 100) return "text-emerald-700 dark:text-emerald-400";
+  if (value >= 75) return "text-amber-700 dark:text-amber-400";
+  return "text-red-700 dark:text-red-400";
+}
+
+function getGpTone(value: number) {
+  if (value >= 20) return "text-emerald-700 dark:text-emerald-400";
+  if (value >= 10) return "text-amber-700 dark:text-amber-400";
+  return "text-red-700 dark:text-red-400";
+}
+
+function getAchievementFill(value: number) {
+  if (value >= 100) return "bg-emerald-700";
+  if (value >= 75) return "bg-amber-500";
+  return "bg-red-600";
+}
+
+function MiniBars({
+  values,
+  colorClass = "bg-emerald-700",
+}: {
+  values: number[];
+  colorClass?: string;
+}) {
+  const maxValue = Math.max(1, ...values);
+
+  return (
+    <div className="flex h-10 items-end gap-1" aria-hidden="true">
+      {values.map((value, index) => (
+        <span
+          key={`${value}-${index}`}
+          className={`w-2 rounded-t-sm ${colorClass}`}
+          style={{ height: `${Math.max(12, (value / maxValue) * 100)}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function Sparkline({
+  values,
+  stroke = "#2E5A43",
+}: {
+  values: number[];
+  stroke?: string;
+}) {
+  const width = 112;
+  const height = 40;
+  const maxValue = Math.max(1, ...values);
+  const points = values
+    .map((value, index) => {
+      const x = values.length <= 1 ? width : (index / (values.length - 1)) * width;
+      const y = height - (value / maxValue) * (height - 6) - 3;
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="h-10 w-28" aria-hidden="true">
+      <polyline
+        points={points}
+        fill="none"
+        stroke={stroke}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="3"
+      />
+    </svg>
+  );
+}
+
+function DonutGauge({
+  value,
+  label,
+}: {
+  value: number;
+  label: string;
+}) {
+  const radius = 34;
+  const circumference = 2 * Math.PI * radius;
+  const clamped = Math.max(0, Math.min(140, value));
+  const offset = circumference - (Math.min(clamped, 100) / 100) * circumference;
+
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-slate-100 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+      <svg viewBox="0 0 80 80" className="h-16 w-16 shrink-0" aria-hidden="true">
+        <circle cx="40" cy="40" r={radius} fill="none" stroke="#E2E8F0" strokeWidth="8" />
+        <circle
+          cx="40"
+          cy="40"
+          r={radius}
+          fill="none"
+          stroke={value >= 100 ? "#047857" : value >= 75 ? "#D97706" : "#DC2626"}
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          strokeWidth="8"
+          transform="rotate(-90 40 40)"
+        />
+      </svg>
+      <div>
+        <div className={`font-mono text-lg font-bold ${getAchievementTone(value)}`}>{formatPercent(value)}</div>
+        <div className="text-xs font-medium text-slate-500">{label}</div>
+      </div>
+    </div>
+  );
+}
+
+function KpiCard({
+  label,
+  value,
+  subValue,
+  icon: Icon,
+  visual,
+}: {
+  label: string;
+  value: string;
+  subValue: string;
+  icon: React.ElementType;
+  visual?: React.ReactNode;
+}) {
+  return (
+    <div className="grid min-h-32 grid-cols-[1fr_auto] gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="min-w-0">
+        <span className="text-xs font-semibold uppercase text-slate-500">{label}</span>
+        <div className="mt-1 break-words font-mono text-xl font-bold leading-tight text-slate-950 tabular-nums dark:text-slate-100 sm:text-2xl">{value}</div>
+        <div className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">{subValue}</div>
+      </div>
+      <div className="flex flex-col items-end justify-between gap-2">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
+          <Icon className="h-5 w-5" />
+        </div>
+        {visual}
+      </div>
+    </div>
+  );
+}
+
+function ProgressBar({ value, colorClass = "bg-[#2E5A43]" }: { value: number; colorClass?: string }) {
+  const clamped = Math.max(0, Math.min(140, value));
+  return (
+    <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+      <div
+        className={`h-full rounded-full ${colorClass}`}
+        style={{ width: `${Math.min(100, clamped)}%` }}
+      />
+    </div>
+  );
+}
+
+export default function DashboardClient({ data: initialData }: DashboardClientProps) {
+  const [data, setData] = useState(initialData);
+  const [viewMode, setViewMode] = useState<"current" | "yearly">("current");
+  const [selectedQuarters, setSelectedQuarters] = useState<number[]>(initialData.selectedQuarters);
+  const [isLoading, setIsLoading] = useState(false);
+  const [expandedManagers, setExpandedManagers] = useState<Record<string, boolean>>({});
+
+  const totals = viewMode === "current" ? data.current : data.yearly;
+  const selectedQuarterLabel = data.selectedQuarters.map((quarter) => `Q${quarter}`).join(", ");
+  const periodLabel =
+    viewMode === "current"
+      ? `FY${data.currentContext.fiscalYear} Q${data.currentContext.quarter} - Hafta ${data.currentContext.weekInQuarter}`
+      : data.selectedQuarters.length === 4
+        ? `FY${data.selectedFiscalYear} yıllık`
+        : `FY${data.selectedFiscalYear} - ${selectedQuarterLabel}`;
+
+  const maxQuarterValue = useMemo(
+    () =>
+      Math.max(
+        1,
+        ...data.quarterlySummary.map((quarter) =>
+          Math.max(quarter.targetRevenue, quarter.forecastRevenue, quarter.backlogRevenue)
+        )
+      ),
+    [data.quarterlySummary]
+  );
+  const maxQuarterGpValue = useMemo(
+    () =>
+      Math.max(
+        1,
+        ...data.quarterlySummary.map((quarter) =>
+          Math.max(quarter.targetGp, quarter.forecastGp, quarter.backlogGp)
+        )
+      ),
+    [data.quarterlySummary]
+  );
+  const forecastSeries = data.quarterlySummary.map((quarter) => quarter.forecastRevenue);
+  const backlogSeries = data.quarterlySummary.map((quarter) => quarter.backlogRevenue);
+  const targetGpSeries = data.quarterlySummary.map((quarter) => quarter.targetGp);
+  const forecastGpSeries = data.quarterlySummary.map((quarter) => quarter.forecastGp);
+  const backlogGpSeries = data.quarterlySummary.map((quarter) => quarter.backlogGp);
+  const gpAchievementSeries = data.quarterlySummary.map((quarter) => quarter.gpAchievement);
+  const managerChartRows = useMemo(
+    () =>
+      data.managers
+        .map((manager) => ({
+          id: manager.id,
+          name: manager.managerName,
+          metrics: viewMode === "current" ? manager.current : manager.yearly,
+        }))
+        .sort((a, b) => b.metrics.forecastGp - a.metrics.forecastGp),
+    [data.managers, viewMode]
+  );
+  const maxManagerForecastGp = Math.max(1, ...managerChartRows.map((row) => row.metrics.forecastGp));
+
+  const toggleManager = (managerId: string) => {
+    setExpandedManagers((current) => ({
+      ...current,
+      [managerId]: !(current[managerId] ?? false),
+    }));
+  };
+
+  const refreshData = useCallback(
+    async (nextQuarters: number[]) => {
+      setIsLoading(true);
+      try {
+        const dashboardData = await getDashboardData(data.selectedFiscalYear, nextQuarters);
+        setData(dashboardData);
+        setExpandedManagers({});
+      } catch (error: unknown) {
+        toast.error(error instanceof Error ? error.message : "Dashboard verileri alınırken hata oluştu.");
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [data.selectedFiscalYear]
+  );
+
+  const toggleQuarter = (quarter: number) => {
+    const exists = selectedQuarters.includes(quarter);
+    const nextQuarters = exists
+      ? selectedQuarters.filter((selectedQuarter) => selectedQuarter !== quarter)
+      : [...selectedQuarters, quarter].sort((a, b) => a - b);
+
+    if (nextQuarters.length === 0) {
+      toast.error("En az bir çeyrek seçili olmalı.");
+      return;
+    }
+
+    setSelectedQuarters(nextQuarters);
+    setViewMode("yearly");
+    void refreshData(nextQuarters);
+  };
+
+  return (
+    <div className="space-y-6 p-6">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h2 className="font-serif text-2xl font-bold tracking-tight text-[#1F3A2E] dark:text-emerald-400">
+            Dashboard
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Mevcut dönem ve yıllık hedef, forecast, backlog görünümü.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge className="bg-emerald-800 text-emerald-50 hover:bg-emerald-800">{periodLabel}</Badge>
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            {[1, 2, 3, 4].map((quarter) => (
+              <Button
+                key={quarter}
+                type="button"
+                size="sm"
+                variant={selectedQuarters.includes(quarter) ? "default" : "ghost"}
+                onClick={() => toggleQuarter(quarter)}
+                className={selectedQuarters.includes(quarter) ? "bg-[#2E5A43] text-white hover:bg-[#1F3A2E]" : ""}
+              >
+                Q{quarter}
+              </Button>
+            ))}
+          </div>
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <Button
+              type="button"
+              size="sm"
+              variant={viewMode === "current" ? "default" : "ghost"}
+              onClick={() => setViewMode("current")}
+              className={viewMode === "current" ? "bg-[#2E5A43] text-white hover:bg-[#1F3A2E]" : ""}
+            >
+              Mevcut Dönem
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={viewMode === "yearly" ? "default" : "ghost"}
+              onClick={() => setViewMode("yearly")}
+              className={viewMode === "yearly" ? "bg-[#2E5A43] text-white hover:bg-[#1F3A2E]" : ""}
+            >
+              Yıllık / Seçili
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm font-medium text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          Dashboard verileri güncelleniyor...
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <KpiCard
+          label="Target GP"
+          value={formatUSD(totals.targetGp)}
+          subValue={`Target NSB ${formatUSD(totals.targetRevenue)}`}
+          icon={Target}
+          visual={<MiniBars values={targetGpSeries} colorClass="bg-sky-600" />}
+        />
+        <KpiCard
+          label="Forecast GP"
+          value={formatUSD(totals.forecastGp)}
+          subValue={`Forecast NSB ${formatUSD(totals.forecastRevenue)}`}
+          icon={TrendingUp}
+          visual={<Sparkline values={forecastGpSeries} />}
+        />
+        <KpiCard
+          label="GP Achievement"
+          value={formatPercent(totals.gpAchievement)}
+          subValue={`NSB achievement ${formatPercent(totals.revenueAchievement)}`}
+          icon={Percent}
+          visual={<MiniBars values={gpAchievementSeries} colorClass={getAchievementFill(totals.gpAchievement)} />}
+        />
+        <KpiCard
+          label="Backlog GP"
+          value={formatUSD(totals.backlogGp)}
+          subValue={`Backlog NSB ${formatUSD(totals.backlogRevenue)}`}
+          icon={DollarSign}
+          visual={<MiniBars values={backlogGpSeries} colorClass="bg-indigo-600" />}
+        />
+        <KpiCard
+          label="Forecast NSB"
+          value={formatUSD(totals.forecastRevenue)}
+          subValue={`Target NSB ${formatUSD(totals.targetRevenue)}`}
+          icon={LineChart}
+          visual={<Sparkline values={forecastSeries} stroke="#475569" />}
+        />
+        <KpiCard
+          label="Forecast GP%"
+          value={formatPercent(totals.forecastGpPercent)}
+          subValue={`Backlog GP% ${formatPercent(totals.backlogGpPercent)}`}
+          icon={BarChart3}
+          visual={<MiniBars values={backlogSeries} colorClass="bg-slate-500" />}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h3 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">
+                Achievement Göstergeleri
+              </h3>
+              <p className="text-xs text-slate-500">NSB ve GP hedef gerçekleşme resmi.</p>
+            </div>
+            <Percent className="h-5 w-5 text-emerald-700" />
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <DonutGauge value={totals.revenueAchievement} label="NSB Achievement" />
+            <DonutGauge value={totals.gpAchievement} label="GP Achievement" />
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h3 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">
+                Satış Müdürü Forecast GP Dağılımı
+              </h3>
+              <p className="text-xs text-slate-500">Forecast GP büyüklüğü ve GP achievement oranı.</p>
+            </div>
+            <BarChart3 className="h-5 w-5 text-emerald-700" />
+          </div>
+          <div className="space-y-3">
+            {managerChartRows.map((row) => (
+              <div key={row.id} className="grid gap-2 sm:grid-cols-[150px_1fr_76px] sm:items-center">
+                <div className="truncate text-xs font-semibold text-slate-700 dark:text-slate-300">{row.name}</div>
+                <div className="h-7 overflow-hidden rounded-md bg-slate-100 dark:bg-slate-800">
+                  <div
+                    className="flex h-full items-center justify-end rounded-md bg-[#2E5A43] px-2 text-[11px] font-semibold text-white"
+                    style={{ width: `${Math.max(8, (row.metrics.forecastGp / maxManagerForecastGp) * 100)}%` }}
+                  >
+                    {formatUSD(row.metrics.forecastGp)}
+                  </div>
+                </div>
+                <div className={`text-right font-mono text-xs font-bold ${getAchievementTone(row.metrics.gpAchievement)}`}>
+                  {formatPercent(row.metrics.gpAchievement)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_0.8fr]">
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+            <div>
+              <h3 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">
+                Satış Müdürü Özeti
+              </h3>
+              <p className="text-xs text-slate-500">Akordiyonu açarak marka detaylarını görün.</p>
+            </div>
+            <Users2 className="h-5 w-5 text-emerald-700" />
+          </div>
+          <Table>
+            <TableHeader className="bg-slate-50 dark:bg-slate-800/50">
+              <TableRow>
+                <TableHead>Satış Müdürü / Marka</TableHead>
+                <TableHead className="text-right">Target GP</TableHead>
+                <TableHead className="text-right">Forecast GP</TableHead>
+                <TableHead className="text-right">GP Achv%</TableHead>
+                <TableHead className="text-right">GP%</TableHead>
+                <TableHead className="text-right">Forecast NSB</TableHead>
+                <TableHead className="text-right">NSB Achv%</TableHead>
+                <TableHead className="text-right">Backlog GP</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.managers.map((manager) => {
+                const metrics = viewMode === "current" ? manager.current : manager.yearly;
+                const isExpanded = expandedManagers[manager.id] ?? false;
+                const ToggleIcon = isExpanded ? ChevronDown : ChevronRight;
+
+                return (
+                  <React.Fragment key={manager.id}>
+                    <TableRow className="bg-slate-50/80 hover:bg-slate-100/80 dark:bg-slate-800/40">
+                      <TableCell>
+                        <button
+                          type="button"
+                          onClick={() => toggleManager(manager.id)}
+                          className="flex w-full items-center gap-2 text-left font-semibold text-slate-950 dark:text-slate-100"
+                        >
+                          <ToggleIcon className="h-4 w-4 text-slate-500" />
+                          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
+                            <Users2 className="h-4 w-4" />
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block truncate">{manager.managerName}</span>
+                            <span className="block text-[11px] font-medium text-slate-500">
+                              {manager.forecastedCount}/{manager.vendors.length} forecast, {manager.targetCount} hedef
+                            </span>
+                          </span>
+                        </button>
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(metrics.targetGp)}</TableCell>
+                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(metrics.forecastGp)}</TableCell>
+                      <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(metrics.gpAchievement)}`}>
+                        {formatPercent(metrics.gpAchievement)}
+                      </TableCell>
+                      <TableCell className={`text-right font-mono text-xs font-bold ${getGpTone(metrics.forecastGpPercent)}`}>
+                        {formatPercent(metrics.forecastGpPercent)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(metrics.forecastRevenue)}</TableCell>
+                      <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(metrics.revenueAchievement)}`}>
+                        {formatPercent(metrics.revenueAchievement)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(metrics.backlogGp)}</TableCell>
+                    </TableRow>
+                    {isExpanded &&
+                      manager.vendors.map((vendor) => {
+                        const vendorMetrics = viewMode === "current" ? vendor.current : vendor.yearly;
+                        return (
+                          <TableRow key={vendor.vendorId} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
+                            <TableCell className="pl-14 font-semibold text-slate-900 dark:text-slate-100">
+                              {vendor.vendorName}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs">{formatUSD(vendorMetrics.targetGp)}</TableCell>
+                            <TableCell className="text-right font-mono text-xs">{formatUSD(vendorMetrics.forecastGp)}</TableCell>
+                            <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(vendorMetrics.gpAchievement)}`}>
+                              {formatPercent(vendorMetrics.gpAchievement)}
+                            </TableCell>
+                            <TableCell className={`text-right font-mono text-xs font-bold ${getGpTone(vendorMetrics.forecastGpPercent)}`}>
+                              {formatPercent(vendorMetrics.forecastGpPercent)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs">{formatUSD(vendorMetrics.forecastRevenue)}</TableCell>
+                            <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(vendorMetrics.revenueAchievement)}`}>
+                              {formatPercent(vendorMetrics.revenueAchievement)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs">{formatUSD(vendorMetrics.backlogGp)}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                  </React.Fragment>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <h3 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">
+                Dikkat Gerekenler
+              </h3>
+              <p className="text-xs text-slate-500">Öncelikli kontrol listesi.</p>
+            </div>
+            <AlertTriangle className="h-5 w-5 text-amber-600" />
+          </div>
+          <div className="max-h-[460px] space-y-2 overflow-y-auto pr-1">
+            {data.attentionItems.length === 0 ? (
+              <div className="rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950/30">
+                Şu an öne çıkan bir risk görünmüyor.
+              </div>
+            ) : (
+              data.attentionItems.map((item, index) => (
+                <div key={`${item.vendorName}-${item.type}-${index}`} className="rounded-lg border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/30">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-bold text-slate-900 dark:text-slate-100">{item.vendorName}</span>
+                    <Badge
+                      variant="outline"
+                      className={
+                        item.severity === "high"
+                          ? "border-red-200 text-red-700"
+                          : item.severity === "medium"
+                            ? "border-amber-200 text-amber-700"
+                            : "border-slate-200 text-slate-600"
+                      }
+                    >
+                      {item.type}
+                    </Badge>
+                  </div>
+                  <div className="mt-1 text-xs font-medium text-slate-500">{item.managerName}</div>
+                  <div className="mt-2 text-xs text-slate-600 dark:text-slate-300">{item.detail}</div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h3 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">
+              Yıllık Çeyrek Resmi
+            </h3>
+            <p className="text-xs text-slate-500">Target, forecast ve backlog GP/NSB karşılaştırması.</p>
+          </div>
+          <BarChart3 className="h-5 w-5 text-emerald-700" />
+        </div>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
+          {data.quarterlySummary.map((quarter) => (
+            <div key={quarter.quarter} className="rounded-lg border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/30">
+              <div className="mb-3 flex items-center justify-between">
+                <span className="font-bold text-slate-900 dark:text-slate-100">Q{quarter.quarter}</span>
+                <span className={`font-mono text-xs font-bold ${getAchievementTone(quarter.revenueAchievement)}`}>
+                  {formatPercent(quarter.revenueAchievement)}
+                </span>
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <div className="mb-1 flex justify-between text-[11px] text-slate-500">
+                    <span>Target GP</span>
+                    <span>{formatUSD(quarter.targetGp)}</span>
+                  </div>
+                  <ProgressBar value={(quarter.targetGp / maxQuarterGpValue) * 100} colorClass="bg-sky-600" />
+                </div>
+                <div>
+                  <div className="mb-1 flex justify-between text-[11px] text-slate-500">
+                    <span>Forecast GP</span>
+                    <span>{formatUSD(quarter.forecastGp)}</span>
+                  </div>
+                  <ProgressBar value={(quarter.forecastGp / maxQuarterGpValue) * 100} colorClass="bg-emerald-700" />
+                </div>
+                <div>
+                  <div className="mb-1 flex justify-between text-[11px] text-slate-500">
+                    <span>Backlog GP</span>
+                    <span>{formatUSD(quarter.backlogGp)}</span>
+                  </div>
+                  <ProgressBar value={(quarter.backlogGp / maxQuarterGpValue) * 100} colorClass="bg-indigo-600" />
+                </div>
+                <div className="border-t border-slate-200 pt-3 dark:border-slate-800">
+                  <div className="mb-1 flex justify-between text-[11px] text-slate-500">
+                    <span>Target NSB</span>
+                    <span>{formatUSD(quarter.targetRevenue)}</span>
+                  </div>
+                  <ProgressBar value={(quarter.targetRevenue / maxQuarterValue) * 100} colorClass="bg-sky-600" />
+                </div>
+                <div>
+                  <div className="mb-1 flex justify-between text-[11px] text-slate-500">
+                    <span>Forecast NSB</span>
+                    <span>{formatUSD(quarter.forecastRevenue)}</span>
+                  </div>
+                  <ProgressBar value={(quarter.forecastRevenue / maxQuarterValue) * 100} colorClass="bg-emerald-700" />
+                </div>
+                <div>
+                  <div className="mb-1 flex justify-between text-[11px] text-slate-500">
+                    <span>Backlog NSB</span>
+                    <span>{formatUSD(quarter.backlogRevenue)}</span>
+                  </div>
+                  <ProgressBar value={(quarter.backlogRevenue / maxQuarterValue) * 100} colorClass="bg-indigo-600" />
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div className="rounded-md bg-white p-2 dark:bg-slate-900">
+                    <div className="text-[10px] font-semibold uppercase text-slate-400">Forecast GP%</div>
+                    <div className={`font-mono text-xs font-bold ${getGpTone(quarter.forecastGpPercent)}`}>
+                      {formatPercent(quarter.forecastGpPercent)}
+                    </div>
+                  </div>
+                  <div className="rounded-md bg-white p-2 dark:bg-slate-900">
+                    <div className="text-[10px] font-semibold uppercase text-slate-400">Backlog GP%</div>
+                    <div className={`font-mono text-xs font-bold ${getGpTone(quarter.backlogGpPercent)}`}>
+                      {formatPercent(quarter.backlogGpPercent)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
+          <LineChart className="h-4 w-4" />
+          Yıllık görünüm, her çeyreğin aktif forecast toplamını ve yüklenmiş backlog verilerini GP öncelikli gösterir.
+        </div>
+      </div>
+    </div>
+  );
+}

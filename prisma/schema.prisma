@@ -1,0 +1,210 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  DIREKTOR
+  SATIS_MUDURU
+}
+
+enum ImportDataType {
+  FORECAST
+  TARGET
+  ACTUAL
+  CLOSING
+}
+
+enum ImportStatus {
+  SUCCESS
+  FAILED
+  REVERTED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role
+  isActive     Boolean  @default(true)
+  imageUrl     String?  // Profile image/avatar URL
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assignedVendors UserVendor[]
+  managedVendors  Vendor[]     @relation("VendorManager")
+  forecasts      Forecast[]
+  importLogs     ImportLog[]
+  auditLogs      AuditLog[]
+}
+
+model Vendor {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  code      String?
+  logoUrl   String?
+  isActive  Boolean  @default(true)
+  managerId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  manager   User?        @relation("VendorManager", fields: [managerId], references: [id])
+  users     UserVendor[]
+  aliases   VendorAlias[]
+  forecasts Forecast[]
+  targets   Target[]
+  actuals   Actual[]
+  closings  Closing[]
+
+  @@index([managerId])
+}
+
+// DEPRECATED: superseded by Vendor.managerId (one-to-many: a manager can own multiple vendors).
+// Kept temporarily for rollback safety after the backfill; scheduled for removal in a follow-up.
+model UserVendor {
+  id        String   @id @default(uuid())
+  userId    String
+  vendorId  String
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, vendorId])
+  @@index([userId])
+  @@index([vendorId])
+}
+
+model VendorAlias {
+  id        String   @id @default(uuid())
+  vendorId  String
+  alias     String   @unique
+  createdAt DateTime @default(now())
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId])
+}
+
+model FiscalPeriod {
+  id         String   @id @default(uuid())
+  fiscalYear Int
+  quarter    Int
+  startDate  DateTime
+  endDate    DateTime
+  isLocked   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  forecasts Forecast[]
+  targets   Target[]
+  actuals   Actual[]
+  closings  Closing[]
+
+  @@unique([fiscalYear, quarter])
+}
+
+model Forecast {
+  id             String   @id @default(uuid())
+  vendorId       String
+  fiscalPeriodId String
+  weekNumber     Int
+  revenue        Decimal  @db.Decimal(18, 2)
+  gp             Decimal  @db.Decimal(18, 2)
+  isActive       Boolean  @default(true)
+  submittedById  String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  vendor       Vendor       @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  fiscalPeriod FiscalPeriod @relation(fields: [fiscalPeriodId], references: [id], onDelete: Restrict)
+  submittedBy  User         @relation(fields: [submittedById], references: [id], onDelete: Restrict)
+
+  @@unique([vendorId, fiscalPeriodId, weekNumber])
+  @@index([vendorId, fiscalPeriodId, isActive])
+  @@index([submittedById])
+}
+
+model Target {
+  id             String   @id @default(uuid())
+  vendorId       String
+  fiscalPeriodId String
+  revenue        Decimal  @db.Decimal(18, 2)
+  gp             Decimal  @db.Decimal(18, 2)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  vendor       Vendor       @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  fiscalPeriod FiscalPeriod @relation(fields: [fiscalPeriodId], references: [id], onDelete: Restrict)
+
+  @@unique([vendorId, fiscalPeriodId])
+  @@index([fiscalPeriodId])
+}
+
+model Actual {
+  id             String   @id @default(uuid())
+  vendorId       String
+  fiscalPeriodId String
+  weekNumber     Int
+  backlog        Decimal  @db.Decimal(18, 2)
+  invoiced       Decimal  @db.Decimal(18, 2)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  vendor       Vendor       @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  fiscalPeriod FiscalPeriod @relation(fields: [fiscalPeriodId], references: [id], onDelete: Restrict)
+
+  @@unique([vendorId, fiscalPeriodId, weekNumber])
+  @@index([fiscalPeriodId])
+}
+
+model Closing {
+  id             String   @id @default(uuid())
+  vendorId       String
+  fiscalPeriodId String
+  revenue        Decimal  @db.Decimal(18, 2)
+  gp             Decimal  @db.Decimal(18, 2)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  vendor       Vendor       @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  fiscalPeriod FiscalPeriod @relation(fields: [fiscalPeriodId], references: [id], onDelete: Restrict)
+
+  @@unique([vendorId, fiscalPeriodId])
+  @@index([fiscalPeriodId])
+}
+
+model ImportLog {
+  id           String         @id @default(uuid())
+  dataType     ImportDataType
+  uploadedById String
+  fileName     String
+  rowCount     Int
+  status       ImportStatus
+  createdAt    DateTime       @default(now())
+
+  uploadedBy User @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([uploadedById])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String
+  oldValue   Json?
+  newValue   Json?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+}
