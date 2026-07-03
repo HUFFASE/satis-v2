@@ -9,11 +9,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { AlertTriangle, Bell, CheckCircle2, LogOut, User, Settings } from "lucide-react";
+import { AlertTriangle, Bell, CheckCircle2, LogOut } from "lucide-react";
 import { getNotificationGroups } from "./notification-actions";
 
 type NotificationGroup = Awaited<ReturnType<typeof getNotificationGroups>>[number];
@@ -224,43 +223,32 @@ export default function Topbar({ user }: TopbarProps) {
 
         {/* User Dropdown */}
         <DropdownMenu>
-          <DropdownMenuTrigger className="focus:outline-none">
-            <div className="flex items-center gap-2.5 cursor-pointer hover:opacity-90 transition-opacity">
-              <Avatar className="h-9 w-9 border border-slate-200 dark:border-slate-800">
-                <AvatarFallback className="bg-[#1F3A2E] text-white text-xs font-bold">
-                  {getInitials(user.name)}
-                </AvatarFallback>
-              </Avatar>
-              <div className="hidden md:flex flex-col items-start text-left">
-                <span className="text-sm font-semibold text-slate-800 dark:text-slate-200 leading-tight">
-                  {user.name}
-                </span>
-                <span className="text-xs text-slate-500 dark:text-slate-400 font-sans">
-                  {formattedRole}
-                </span>
-              </div>
+          <DropdownMenuTrigger className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-[#1F3A2E]/20 dark:hover:bg-slate-800">
+            <Avatar className="h-9 w-9 border border-slate-200 dark:border-slate-800">
+              <AvatarFallback className="bg-[#1F3A2E] text-white text-xs font-bold">
+                {getInitials(user.name)}
+              </AvatarFallback>
+            </Avatar>
+            <div className="hidden md:flex flex-col items-start text-left">
+              <span className="text-sm font-semibold text-slate-800 dark:text-slate-200 leading-tight">
+                {user.name}
+              </span>
+              <span className="text-xs text-slate-500 dark:text-slate-400 font-sans">
+                {formattedRole}
+              </span>
             </div>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56 mt-2 border-slate-200 dark:border-slate-800 shadow-lg">
-            <DropdownMenuLabel className="font-sans">
+            <div className="px-1.5 py-1 font-sans">
               <div className="flex flex-col">
                 <span className="font-semibold text-slate-900 dark:text-slate-100">{user.name}</span>
                 <span className="text-xs text-slate-500 dark:text-slate-400 truncate">{user.email}</span>
               </div>
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator className="bg-slate-100 dark:bg-slate-800" />
-            <DropdownMenuItem className="cursor-pointer font-sans py-2">
-              <User className="h-4 w-4 mr-2 text-slate-500" />
-              Profilim
-            </DropdownMenuItem>
-            <DropdownMenuItem className="cursor-pointer font-sans py-2">
-              <Settings className="h-4 w-4 mr-2 text-slate-500" />
-              Ayarlar
-            </DropdownMenuItem>
+            </div>
             <DropdownMenuSeparator className="bg-slate-100 dark:bg-slate-800" />
             <DropdownMenuItem
               onClick={() => signOut({ callbackUrl: "/login" })}
-              className="text-red-600 dark:text-red-400 focus:text-red-700 dark:focus:text-red-300 cursor-pointer font-sans py-2"
+              className="cursor-pointer font-sans py-2 text-red-600 focus:text-red-700 dark:text-red-400 dark:focus:text-red-300"
             >
               <LogOut className="h-4 w-4 mr-2" />
               Çıkış Yap
