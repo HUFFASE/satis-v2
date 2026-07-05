@@ -250,6 +250,8 @@ export async function getActiveForecasts(fiscalYear: number, quarter: number) {
     throw new Error("Oturum açık değil.");
   }
 
+  const currentContext = getFiscalContext(new Date());
+  const isCurrentFiscalPeriod = currentContext.fiscalYear === fiscalYear && currentContext.quarter === quarter;
   const accessibleVendorIds = await getAccessibleVendorIds(session.user);
   const period = await ensureFiscalPeriod(fiscalYear, quarter);
 
@@ -275,7 +277,7 @@ export async function getActiveForecasts(fiscalYear: number, quarter: number) {
     where: {
       vendorId: { in: accessibleVendorIds },
       fiscalPeriodId: period.id,
-      isActive: true,
+      ...(isCurrentFiscalPeriod ? { weekNumber: currentContext.weekInQuarter } : { isActive: true }),
     },
   });
   const forecastMap = new Map(forecasts.map((forecast) => [forecast.vendorId, forecast]));

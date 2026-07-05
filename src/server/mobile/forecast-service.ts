@@ -89,6 +89,8 @@ async function writeActiveForecast(
 }
 
 export async function getMobileActiveForecasts(user: MobileSessionUser, fiscalYear: number, quarter: number) {
+  const currentContext = getFiscalContext(new Date());
+  const isCurrentFiscalPeriod = currentContext.fiscalYear === fiscalYear && currentContext.quarter === quarter;
   const accessibleVendorIds = await getAccessibleVendorIds(user);
   const period = await ensureFiscalPeriod(fiscalYear, quarter);
 
@@ -114,7 +116,7 @@ export async function getMobileActiveForecasts(user: MobileSessionUser, fiscalYe
       where: {
         vendorId: { in: accessibleVendorIds },
         fiscalPeriodId: period.id,
-        isActive: true,
+        ...(isCurrentFiscalPeriod ? { weekNumber: currentContext.weekInQuarter } : { isActive: true }),
       },
     }),
     prisma.target.findMany({
