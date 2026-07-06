@@ -9,6 +9,7 @@ import { getAccessibleVendorIds } from "@/lib/scope";
 type NotificationSeverity = "high" | "medium" | "low";
 type NotificationType =
   | "GP_PERCENT_RISK"
+  | "BACKLOG_FORECAST_RISK"
   | "FORECAST_MISSING"
   | "ACHIEVEMENT_RISK"
   | "CLOSING_MISSING"
@@ -39,6 +40,14 @@ function formatPercent(value: number) {
   return `${value.toFixed(1)}%`;
 }
 
+function formatUSD(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
 function calculatePercent(value: number, target: number) {
   return target > 0 ? (value / target) * 100 : 0;
 }
@@ -61,7 +70,7 @@ export async function getNotificationGroups(): Promise<NotificationGroup[]> {
   const oneWeekAgo = new Date();
   oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
 
-  const [vendors, forecasts, targets, closings, recentImports] = await Promise.all([
+  const [vendors, forecasts, targets, actuals, closings, recentImports] = await Promise.all([
     prisma.vendor.findMany({
       where: { id: { in: accessibleVendorIds }, isActive: true },
       select: {
@@ -98,6 +107,18 @@ export async function getNotificationGroups(): Promise<NotificationGroup[]> {
         gp: true,
       },
     }),
+    prisma.actual.findMany({
+      where: {
+        vendorId: { in: accessibleVendorIds },
+        fiscalPeriodId: period.id,
+        weekNumber: current.weekInQuarter,
+      },
+      select: {
+        vendorId: true,
+        weekNumber: true,
+        backlog: true,
+      },
+    }),
     prisma.closing.findMany({
       where: {
         vendorId: { in: accessibleVendorIds },
@@ -125,6 +146,7 @@ export async function getNotificationGroups(): Promise<NotificationGroup[]> {
   const vendorById = new Map(vendors.map((vendor) => [vendor.id, vendor]));
   const activeForecastByVendor = new Map(forecasts.filter((forecast) => forecast.isActive).map((forecast) => [forecast.vendorId, forecast]));
   const targetByVendor = new Map(targets.map((target) => [target.vendorId, target]));
+  const activeActualByVendor = new Map(actuals.map((actual) => [actual.vendorId, actual]));
   const closingVendorIds = new Set(closings.map((closing) => closing.vendorId));
   const groups: NotificationGroup[] = [];
 
@@ -173,6 +195,38 @@ export async function getNotificationGroups(): Promise<NotificationGroup[]> {
       severity: "high",
       targetUrl: groupUrl("/dashboard", current),
       items: gpRiskItems,
+    });
+  }
+
+  const backlogRiskItems = forecasts
+    .filter((forecast) => forecast.isActive)
+    .flatMap((forecast) => {
+      const actual = activeActualByVendor.get(forecast.vendorId);
+      const vendor = vendorById.get(forecast.vendorId);
+      if (!actual || !vendor) return [];
+
+      const forecastRevenue = Number(forecast.revenue);
+      const backlogRevenue = Number(actual.backlog);
+      if (forecastRevenue >= backlogRevenue) return [];
+
+      return [
+        {
+          label: vendor.name,
+          detail: vendor.manager?.name ?? "Atanmamış",
+          value: `Forecast ${formatUSD(forecastRevenue)} / Backlog ${formatUSD(backlogRevenue)}`,
+        },
+      ];
+    });
+
+  if (backlogRiskItems.length > 0) {
+    groups.push({
+      type: "BACKLOG_FORECAST_RISK",
+      title: "Backlog > Forecast",
+      summary: `${backlogRiskItems.length} vendor forecast değeri backlog altında.`,
+      count: backlogRiskItems.length,
+      severity: "high",
+      targetUrl: groupUrl("/forecast-input", current),
+      items: backlogRiskItems,
     });
   }
 

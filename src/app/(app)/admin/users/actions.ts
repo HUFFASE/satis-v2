@@ -74,6 +74,274 @@ export async function getUsers() {
   }));
 }
 
+function calculateGpPercent(revenue: number, gp: number) {
+  return revenue > 0 ? (gp / revenue) * 100 : 0;
+}
+
+export async function getUserDetail(userId: string) {
+  await requireDirector();
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      isActive: true,
+      imageUrl: true,
+      createdAt: true,
+      updatedAt: true,
+      managedVendors: {
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          isActive: true,
+        },
+        orderBy: { name: "asc" },
+      },
+    },
+  });
+
+  if (!user) {
+    throw new Error("Kullanıcı bulunamadı.");
+  }
+
+  const vendors =
+    user.role === "DIREKTOR"
+      ? await prisma.vendor.findMany({
+          where: { isActive: true },
+          select: { id: true, name: true, code: true, isActive: true },
+          orderBy: { name: "asc" },
+        })
+      : user.managedVendors;
+  const vendorIds = vendors.map((vendor) => vendor.id);
+
+  const [targets, forecasts, actuals, closings] =
+    vendorIds.length === 0
+      ? [[], [], [], []]
+      : await Promise.all([
+          prisma.target.findMany({
+            where: { vendorId: { in: vendorIds } },
+            include: { fiscalPeriod: true, vendor: { select: { name: true } } },
+            orderBy: [{ fiscalPeriod: { fiscalYear: "asc" } }, { fiscalPeriod: { quarter: "asc" } }],
+          }),
+          prisma.forecast.findMany({
+            where: { vendorId: { in: vendorIds }, isActive: true },
+            include: { fiscalPeriod: true, vendor: { select: { name: true } } },
+            orderBy: [{ fiscalPeriod: { fiscalYear: "asc" } }, { fiscalPeriod: { quarter: "asc" } }],
+          }),
+          prisma.actual.findMany({
+            where: { vendorId: { in: vendorIds } },
+            include: { fiscalPeriod: true, vendor: { select: { name: true } } },
+            orderBy: [{ fiscalPeriod: { fiscalYear: "asc" } }, { fiscalPeriod: { quarter: "asc" } }, { weekNumber: "asc" }],
+          }),
+          prisma.closing.findMany({
+            where: { vendorId: { in: vendorIds } },
+            include: { fiscalPeriod: true, vendor: { select: { name: true } } },
+            orderBy: [{ fiscalPeriod: { fiscalYear: "asc" } }, { fiscalPeriod: { quarter: "asc" } }],
+          }),
+        ]);
+
+  const periodMap = new Map<
+    string,
+    {
+      fiscalYear: number;
+      quarter: number;
+      targetRevenue: number;
+      targetGp: number;
+      forecastRevenue: number;
+      forecastGp: number;
+      backlogRevenue: number;
+      backlogGp: number;
+      closingRevenue: number;
+      closingGp: number;
+      vendorCount: Set<string>;
+    }
+  >();
+  const vendorMap = new Map<
+    string,
+    {
+      vendorId: string;
+      vendorName: string;
+      targetRevenue: number;
+      targetGp: number;
+      forecastRevenue: number;
+      forecastGp: number;
+      backlogRevenue: number;
+      backlogGp: number;
+      closingRevenue: number;
+      closingGp: number;
+    }
+  >();
+
+  function emptyVendor(vendorId: string, vendorName: string) {
+    return {
+      vendorId,
+      vendorName,
+      targetRevenue: 0,
+      targetGp: 0,
+      forecastRevenue: 0,
+      forecastGp: 0,
+      backlogRevenue: 0,
+      backlogGp: 0,
+      closingRevenue: 0,
+      closingGp: 0,
+    };
+  }
+
+  for (const vendor of vendors) {
+    vendorMap.set(vendor.id, emptyVendor(vendor.id, vendor.name));
+  }
+
+  function periodRow(period: { id: string; fiscalYear: number; quarter: number }) {
+    const existing = periodMap.get(period.id);
+    if (existing) return existing;
+    const row = {
+      fiscalYear: period.fiscalYear,
+      quarter: period.quarter,
+      targetRevenue: 0,
+      targetGp: 0,
+      forecastRevenue: 0,
+      forecastGp: 0,
+      backlogRevenue: 0,
+      backlogGp: 0,
+      closingRevenue: 0,
+      closingGp: 0,
+      vendorCount: new Set<string>(),
+    };
+    periodMap.set(period.id, row);
+    return row;
+  }
+
+  function vendorRow(vendorId: string, vendorName: string) {
+    const existing = vendorMap.get(vendorId);
+    if (existing) return existing;
+    const row = emptyVendor(vendorId, vendorName);
+    vendorMap.set(vendorId, row);
+    return row;
+  }
+
+  for (const target of targets) {
+    const period = periodRow(target.fiscalPeriod);
+    const vendor = vendorRow(target.vendorId, target.vendor.name);
+    const revenue = Number(target.revenue);
+    const gp = Number(target.gp);
+    period.targetRevenue += revenue;
+    period.targetGp += gp;
+    period.vendorCount.add(target.vendorId);
+    vendor.targetRevenue += revenue;
+    vendor.targetGp += gp;
+  }
+
+  for (const forecast of forecasts) {
+    const period = periodRow(forecast.fiscalPeriod);
+    const vendor = vendorRow(forecast.vendorId, forecast.vendor.name);
+    const revenue = Number(forecast.revenue);
+    const gp = Number(forecast.gp);
+    period.forecastRevenue += revenue;
+    period.forecastGp += gp;
+    period.vendorCount.add(forecast.vendorId);
+    vendor.forecastRevenue += revenue;
+    vendor.forecastGp += gp;
+  }
+
+  for (const actual of actuals) {
+    const period = periodRow(actual.fiscalPeriod);
+    const vendor = vendorRow(actual.vendorId, actual.vendor.name);
+    const revenue = Number(actual.backlog);
+    const gp = Number(actual.invoiced);
+    period.backlogRevenue += revenue;
+    period.backlogGp += gp;
+    period.vendorCount.add(actual.vendorId);
+    vendor.backlogRevenue += revenue;
+    vendor.backlogGp += gp;
+  }
+
+  for (const closing of closings) {
+    const period = periodRow(closing.fiscalPeriod);
+    const vendor = vendorRow(closing.vendorId, closing.vendor.name);
+    const revenue = Number(closing.revenue);
+    const gp = Number(closing.gp);
+    period.closingRevenue += revenue;
+    period.closingGp += gp;
+    period.vendorCount.add(closing.vendorId);
+    vendor.closingRevenue += revenue;
+    vendor.closingGp += gp;
+  }
+
+  const periods = Array.from(periodMap.values()).sort(
+    (a, b) => b.fiscalYear - a.fiscalYear || b.quarter - a.quarter
+  );
+  const vendorRows = Array.from(vendorMap.values()).sort((a, b) => a.vendorName.localeCompare(b.vendorName, "tr"));
+  const totals = periods.reduce(
+    (acc, row) => {
+      acc.targetRevenue += row.targetRevenue;
+      acc.targetGp += row.targetGp;
+      acc.forecastRevenue += row.forecastRevenue;
+      acc.forecastGp += row.forecastGp;
+      acc.backlogRevenue += row.backlogRevenue;
+      acc.backlogGp += row.backlogGp;
+      acc.closingRevenue += row.closingRevenue;
+      acc.closingGp += row.closingGp;
+      return acc;
+    },
+    {
+      targetRevenue: 0,
+      targetGp: 0,
+      forecastRevenue: 0,
+      forecastGp: 0,
+      backlogRevenue: 0,
+      backlogGp: 0,
+      closingRevenue: 0,
+      closingGp: 0,
+    }
+  );
+
+  return {
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      isActive: user.isActive,
+      imageUrl: user.imageUrl,
+      createdAt: user.createdAt.toISOString(),
+      updatedAt: user.updatedAt.toISOString(),
+    },
+    vendors,
+    counts: {
+      vendors: vendors.length,
+      targets: targets.length,
+      forecasts: forecasts.length,
+      actuals: actuals.length,
+      closings: closings.length,
+    },
+    totals: {
+      ...totals,
+      targetGpPercent: calculateGpPercent(totals.targetRevenue, totals.targetGp),
+      forecastGpPercent: calculateGpPercent(totals.forecastRevenue, totals.forecastGp),
+      backlogGpPercent: calculateGpPercent(totals.backlogRevenue, totals.backlogGp),
+      closingGpPercent: calculateGpPercent(totals.closingRevenue, totals.closingGp),
+    },
+    periods: periods.map((row) => ({
+      fiscalYear: row.fiscalYear,
+      quarter: row.quarter,
+      vendorCount: row.vendorCount.size,
+      targetRevenue: row.targetRevenue,
+      targetGp: row.targetGp,
+      forecastRevenue: row.forecastRevenue,
+      forecastGp: row.forecastGp,
+      backlogRevenue: row.backlogRevenue,
+      backlogGp: row.backlogGp,
+      closingRevenue: row.closingRevenue,
+      closingGp: row.closingGp,
+    })),
+    vendorRows,
+  };
+}
+
 /**
  * Creates a new user in the system.
  */

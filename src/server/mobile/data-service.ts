@@ -486,6 +486,37 @@ export async function getMobileClosings(user: MobileSessionUser, fiscalYear: num
   };
 }
 
+export async function upsertMobileClosing(
+  user: MobileSessionUser,
+  input: { vendorId: string; fiscalYear: number; quarter: number; revenue: number; gp: number }
+) {
+  await assertVendorAccess(user, input.vendorId);
+  const period = await ensureFiscalPeriod(input.fiscalYear, input.quarter);
+  if (period.isLocked) {
+    throw new Error("Seçilen çeyrek kilitlenmiş durumdadır. Kilitli dönemler üzerinde kapanış güncellemesi yapılamaz.");
+  }
+
+  const existing = await prisma.closing.findUnique({
+    where: { vendorId_fiscalPeriodId: { vendorId: input.vendorId, fiscalPeriodId: period.id } },
+  });
+  const closing = await prisma.closing.upsert({
+    where: { vendorId_fiscalPeriodId: { vendorId: input.vendorId, fiscalPeriodId: period.id } },
+    update: { revenue: input.revenue, gp: input.gp },
+    create: { vendorId: input.vendorId, fiscalPeriodId: period.id, revenue: input.revenue, gp: input.gp },
+  });
+
+  await writeAuditLog({
+    userId: user.id,
+    action: existing ? "MOBILE_UPDATE_CLOSING" : "MOBILE_CREATE_CLOSING",
+    entityType: "Closing",
+    entityId: closing.id,
+    oldValue: existing ? { revenue: Number(existing.revenue), gp: Number(existing.gp), fiscalPeriodId: period.id } : null,
+    newValue: { revenue: Number(closing.revenue), gp: Number(closing.gp), fiscalPeriodId: period.id },
+  });
+
+  return { success: true, closingId: closing.id };
+}
+
 export async function getMobileReports(user: MobileSessionUser, fiscalYear: number, quarters?: number[]) {
   const selectedQuarters = normalizeQuarters(quarters);
   const periods = await Promise.all(selectedQuarters.map((quarter) => ensureFiscalPeriod(fiscalYear, quarter)));

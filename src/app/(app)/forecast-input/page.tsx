@@ -29,7 +29,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
+  AlertTriangle,
   Calendar,
   ChevronDown,
   ChevronRight,
@@ -74,6 +76,10 @@ interface ForecastRow {
   submittedAt: Date | string | null;
   hasForecast: boolean;
   hasTarget: boolean;
+  backlogRevenue: number;
+  backlogWeekNumber: number;
+  hasBacklog: boolean;
+  isBelowBacklog: boolean;
   isPeriodLocked: boolean;
 }
 
@@ -99,6 +105,7 @@ interface ManagerForecastGroup {
   gp: number;
   forecastedCount: number;
   targetedCount: number;
+  backlogRiskCount: number;
   latestSubmittedAt: Date | string | null;
 }
 
@@ -115,6 +122,17 @@ interface ForecastImportInspectResult {
 }
 
 const SKIP_FORECAST_SHEET_VALUE = "__skip__";
+type ForecastSortKey =
+  | "managerName"
+  | "targetRevenue"
+  | "targetGp"
+  | "targetGpPercent"
+  | "revenue"
+  | "gp"
+  | "gpPercent"
+  | "revenueAchievement"
+  | "gpAchievement";
+type SortDirection = "asc" | "desc";
 
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -170,6 +188,8 @@ export default function ForecastInputPage() {
   const [bulkInspectResult, setBulkInspectResult] = useState<ForecastImportInspectResult | null>(null);
   const [sheetMappings, setSheetMappings] = useState<Record<string, string>>({});
   const [copyingManagerId, setCopyingManagerId] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<ForecastSortKey>("managerName");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
 
   const [historyVendor, setHistoryVendor] = useState<ForecastRow | null>(null);
   const [versions, setVersions] = useState<ForecastVersion[]>([]);
@@ -249,6 +269,7 @@ export default function ForecastInputPage() {
         existing.gp += row.gp;
         existing.forecastedCount += row.hasForecast ? 1 : 0;
         existing.targetedCount += row.hasTarget ? 1 : 0;
+        existing.backlogRiskCount += row.isBelowBacklog ? 1 : 0;
         if (
           row.submittedAt &&
           (!existing.latestSubmittedAt ||
@@ -269,6 +290,7 @@ export default function ForecastInputPage() {
         gp: row.gp,
         forecastedCount: row.hasForecast ? 1 : 0,
         targetedCount: row.hasTarget ? 1 : 0,
+        backlogRiskCount: row.isBelowBacklog ? 1 : 0,
         latestSubmittedAt: row.submittedAt,
       });
     }
@@ -280,6 +302,55 @@ export default function ForecastInputPage() {
       }))
       .sort((a, b) => a.managerName.localeCompare(b.managerName, "tr"));
   }, [forecasts]);
+
+  const handleSort = (key: ForecastSortKey) => {
+    if (sortKey === key) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(key);
+    setSortDirection(key === "managerName" ? "asc" : "desc");
+  };
+
+  const sortedManagerGroups = useMemo(() => {
+    const getValue = (group: ManagerForecastGroup) => {
+      const targetGPPercent = group.targetRevenue > 0 ? (group.targetGp / group.targetRevenue) * 100 : 0;
+      const gpPercent = group.revenue > 0 ? (group.gp / group.revenue) * 100 : 0;
+      const revenueAchievement = group.targetRevenue > 0 ? (group.revenue / group.targetRevenue) * 100 : 0;
+      const gpAchievement = group.targetGp > 0 ? (group.gp / group.targetGp) * 100 : 0;
+
+      switch (sortKey) {
+        case "managerName":
+          return group.managerName;
+        case "targetRevenue":
+          return group.targetRevenue;
+        case "targetGp":
+          return group.targetGp;
+        case "targetGpPercent":
+          return targetGPPercent;
+        case "revenue":
+          return group.revenue;
+        case "gp":
+          return group.gp;
+        case "gpPercent":
+          return gpPercent;
+        case "revenueAchievement":
+          return revenueAchievement;
+        case "gpAchievement":
+          return gpAchievement;
+      }
+    };
+
+    return [...managerGroups].sort((a, b) => {
+      const left = getValue(a);
+      const right = getValue(b);
+      const result =
+        typeof left === "string" && typeof right === "string"
+          ? left.localeCompare(right, "tr")
+          : Number(left) - Number(right);
+      return sortDirection === "asc" ? result : -result;
+    });
+  }, [managerGroups, sortDirection, sortKey]);
 
   const toggleManager = (managerId: string) => {
     setExpandedManagers((current) => ({
@@ -576,37 +647,42 @@ export default function ForecastInputPage() {
           </div>
         ) : (
           <Table>
-            <TableHeader className="bg-slate-50 dark:bg-slate-800/50">
+            <TableHeader className="bg-emerald-800 shadow-sm">
               <TableRow>
-                <TableHead rowSpan={2} className="min-w-52 font-semibold text-slate-700 dark:text-slate-300">
-                  Marka
-                </TableHead>
-                <TableHead colSpan={3} className="text-center font-semibold text-slate-700 dark:text-slate-300">
+                <SortableTableHead
+                  rowSpan={2}
+                  label="Marka"
+                  active={sortKey === "managerName"}
+                  direction={sortDirection}
+                  onClick={() => handleSort("managerName")}
+                  className="min-w-52"
+                />
+                <th colSpan={3} className="border-b border-l border-emerald-600 bg-emerald-800 px-4 py-2.5 text-center text-sm font-extrabold uppercase tracking-wide text-white">
                   Hedef
-                </TableHead>
-                <TableHead colSpan={3} className="text-center font-semibold text-slate-700 dark:text-slate-300">
+                </th>
+                <th colSpan={3} className="border-b border-l border-emerald-600 bg-emerald-800 px-4 py-2.5 text-center text-sm font-extrabold uppercase tracking-wide text-white">
                   Forecast
-                </TableHead>
-                <TableHead colSpan={2} className="text-center font-semibold text-slate-700 dark:text-slate-300">
+                </th>
+                <th colSpan={2} className="border-b border-l border-emerald-600 bg-emerald-800 px-4 py-2.5 text-center text-sm font-extrabold uppercase tracking-wide text-white">
                   Achievement
-                </TableHead>
-                <TableHead rowSpan={2} className="text-right font-semibold text-slate-700 dark:text-slate-300">
+                </th>
+                <th rowSpan={2} className="border-b border-l border-emerald-600 bg-emerald-800 px-4 py-2 text-right text-xs font-extrabold uppercase tracking-wide text-white">
                   İşlem
-                </TableHead>
+                </th>
               </TableRow>
               <TableRow>
-                <TableHead className="text-right text-xs font-semibold text-slate-600 dark:text-slate-300">NSB</TableHead>
-                <TableHead className="text-right text-xs font-semibold text-slate-600 dark:text-slate-300">GP</TableHead>
-                <TableHead className="text-right text-xs font-semibold text-slate-600 dark:text-slate-300">GP%</TableHead>
-                <TableHead className="text-right text-xs font-semibold text-slate-600 dark:text-slate-300">NSB</TableHead>
-                <TableHead className="text-right text-xs font-semibold text-slate-600 dark:text-slate-300">GP</TableHead>
-                <TableHead className="text-right text-xs font-semibold text-slate-600 dark:text-slate-300">GP%</TableHead>
-                <TableHead className="text-right text-xs font-semibold text-slate-600 dark:text-slate-300">NSB</TableHead>
-                <TableHead className="text-right text-xs font-semibold text-slate-600 dark:text-slate-300">GP</TableHead>
+                <SortableTableHead label="NSB" align="right" active={sortKey === "targetRevenue"} direction={sortDirection} onClick={() => handleSort("targetRevenue")} />
+                <SortableTableHead label="GP" align="right" active={sortKey === "targetGp"} direction={sortDirection} onClick={() => handleSort("targetGp")} />
+                <SortableTableHead label="GP%" align="right" active={sortKey === "targetGpPercent"} direction={sortDirection} onClick={() => handleSort("targetGpPercent")} />
+                <SortableTableHead label="NSB" align="right" active={sortKey === "revenue"} direction={sortDirection} onClick={() => handleSort("revenue")} />
+                <SortableTableHead label="GP" align="right" active={sortKey === "gp"} direction={sortDirection} onClick={() => handleSort("gp")} />
+                <SortableTableHead label="GP%" align="right" active={sortKey === "gpPercent"} direction={sortDirection} onClick={() => handleSort("gpPercent")} />
+                <SortableTableHead label="NSB" align="right" active={sortKey === "revenueAchievement"} direction={sortDirection} onClick={() => handleSort("revenueAchievement")} />
+                <SortableTableHead label="GP" align="right" active={sortKey === "gpAchievement"} direction={sortDirection} onClick={() => handleSort("gpAchievement")} />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {managerGroups.map((group) => {
+              {sortedManagerGroups.map((group) => {
                 const isExpanded = expandedManagers[group.id] ?? false;
                 const ToggleIcon = isExpanded ? ChevronDown : ChevronRight;
                 const groupTargetGPPercent =
@@ -621,7 +697,7 @@ export default function ForecastInputPage() {
                   <React.Fragment key={group.id}>
                     <TableRow
                       aria-expanded={isExpanded}
-                      className="bg-slate-50/80 hover:bg-slate-100/80 dark:bg-slate-800/40 dark:hover:bg-slate-800/60"
+                      className="border-l-4 border-emerald-700 bg-emerald-50/80 shadow-[inset_0_-1px_0_rgba(16,185,129,0.18)] hover:bg-emerald-100/80 dark:border-emerald-500 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/30"
                     >
                       <TableCell className="font-semibold text-slate-950 dark:text-slate-100">
                         <div className="flex w-full items-center gap-2">
@@ -638,6 +714,7 @@ export default function ForecastInputPage() {
                               <span className="block truncate">{group.managerName}</span>
                               <span className="block text-[11px] font-medium text-slate-500 dark:text-slate-400">
                                 {group.forecastedCount}/{group.rows.length} forecast, {group.targetedCount} hedef
+                                {group.backlogRiskCount > 0 ? `, ${group.backlogRiskCount} backlog uyarısı` : ""}
                               </span>
                             </span>
                           </button>
@@ -659,22 +736,22 @@ export default function ForecastInputPage() {
                           </Button>
                         </div>
                       </TableCell>
-                      <TableCell className="text-right font-mono text-[11px] font-bold">
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">
                         {formatUSD(group.targetRevenue)}
                       </TableCell>
-                      <TableCell className="text-right font-mono text-[11px] font-bold">{formatUSD(group.targetGp)}</TableCell>
-                      <TableCell className={`text-right font-mono text-[11px] font-bold ${getPercentTone(groupTargetGPPercent)}`}>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.targetGp)}</TableCell>
+                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getPercentTone(groupTargetGPPercent)}`}>
                         {formatPercent(groupTargetGPPercent)}
                       </TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(group.revenue)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(group.gp)}</TableCell>
-                      <TableCell className={`text-right font-mono text-xs font-bold ${getPercentTone(groupGPPercent)}`}>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.revenue)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.gp)}</TableCell>
+                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getPercentTone(groupGPPercent)}`}>
                         {formatPercent(groupGPPercent)}
                       </TableCell>
-                      <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(groupRevenueAchievement)}`}>
+                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAchievementTone(groupRevenueAchievement)}`}>
                         {formatPercent(groupRevenueAchievement)}
                       </TableCell>
-                      <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(groupGPAchievement)}`}>
+                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAchievementTone(groupGPAchievement)}`}>
                         {formatPercent(groupGPAchievement)}
                       </TableCell>
                       <TableCell className="text-right text-[11px] font-medium text-slate-500">
@@ -684,9 +761,22 @@ export default function ForecastInputPage() {
 
                     {isExpanded &&
                       group.rows.map((row) => (
-                        <TableRow key={row.vendorId} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
-                          <TableCell className="pl-14 font-semibold text-slate-900 dark:text-slate-100">
+                        <TableRow
+                          key={row.vendorId}
+                          className={
+                            row.isBelowBacklog
+                              ? "bg-red-50/80 hover:bg-red-100/80 dark:bg-red-950/20 dark:hover:bg-red-950/30"
+                              : "hover:bg-slate-50/60 dark:hover:bg-slate-800/30"
+                          }
+                        >
+                          <TableCell className={`pl-14 font-semibold ${row.isBelowBacklog ? "text-red-900 dark:text-red-200" : "text-slate-900 dark:text-slate-100"}`}>
                             {row.vendorName}
+                            {row.isBelowBacklog ? (
+                              <div className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-red-700 dark:text-red-300">
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                                Aktif backlog H{row.backlogWeekNumber}: {formatUSD(row.backlogRevenue)}
+                              </div>
+                            ) : null}
                           </TableCell>
                           <TableCell className="text-right font-mono text-[11px]">
                             {row.hasTarget ? formatUSD(row.targetRevenue) : "-"}
@@ -697,7 +787,21 @@ export default function ForecastInputPage() {
                           <TableCell className={`text-right font-mono text-[11px] font-bold ${getPercentTone(row.targetGpPercent)}`}>
                             {row.hasTarget ? formatPercent(row.targetGpPercent) : "-"}
                           </TableCell>
-                          <TableCell className="text-right font-mono text-xs">{row.hasForecast ? formatUSD(row.revenue) : "-"}</TableCell>
+                          <TableCell className={`text-right font-mono text-xs ${row.isBelowBacklog ? "font-bold text-red-700 dark:text-red-300" : ""}`}>
+                            {row.hasForecast ? (
+                              <span className="inline-flex items-center justify-end gap-1">
+                                {row.isBelowBacklog ? (
+                                  <AlertTriangle
+                                    className="h-3.5 w-3.5 text-red-600 dark:text-red-300"
+                                    aria-label="Forecast backlog altında"
+                                  />
+                                ) : null}
+                                <span>{formatUSD(row.revenue)}</span>
+                              </span>
+                            ) : (
+                              "-"
+                            )}
+                          </TableCell>
                           <TableCell className="text-right font-mono text-xs">{row.hasForecast ? formatUSD(row.gp) : "-"}</TableCell>
                           <TableCell className={`text-right font-mono text-xs font-bold ${getPercentTone(row.gpPercent)}`}>
                             {row.hasForecast ? formatPercent(row.gpPercent) : "-"}
@@ -739,22 +843,22 @@ export default function ForecastInputPage() {
                 );
               })}
 
-              <TableRow className="border-t-2 border-slate-200 bg-slate-50/70 font-bold dark:border-slate-800 dark:bg-slate-800/30">
+              <TableRow className="border-t-2 border-emerald-800 bg-[#1F3A2E] font-bold text-white hover:bg-[#1F3A2E] dark:border-emerald-500 dark:bg-emerald-950">
                 <TableCell>GENEL TOPLAM ({forecastedCount}/{forecasts.length})</TableCell>
-                <TableCell className="text-right font-mono text-xs">{formatUSD(totalTargetRevenue)}</TableCell>
-                <TableCell className="text-right font-mono text-xs">{formatUSD(totalTargetGP)}</TableCell>
-                <TableCell className={`text-right font-mono text-xs ${getPercentTone(totalTargetGPPercent)}`}>
+                <TableCell className="text-right font-mono text-sm font-extrabold">{formatUSD(totalTargetRevenue)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold">{formatUSD(totalTargetGP)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-100">
                   {formatPercent(totalTargetGPPercent)}
                 </TableCell>
-                <TableCell className="text-right font-mono text-xs">{formatUSD(totalRevenue)}</TableCell>
-                <TableCell className="text-right font-mono text-xs">{formatUSD(totalGP)}</TableCell>
-                <TableCell className={`text-right font-mono text-xs ${getPercentTone(totalGPPercent)}`}>
+                <TableCell className="text-right font-mono text-sm font-extrabold">{formatUSD(totalRevenue)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold">{formatUSD(totalGP)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-100">
                   {formatPercent(totalGPPercent)}
                 </TableCell>
-                <TableCell className={`text-right font-mono text-xs ${getAchievementTone(totalRevenueAchievement)}`}>
+                <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-100">
                   {formatPercent(totalRevenueAchievement)}
                 </TableCell>
-                <TableCell className={`text-right font-mono text-xs ${getAchievementTone(totalGPAchievement)}`}>
+                <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-100">
                   {formatPercent(totalGPAchievement)}
                 </TableCell>
                 <TableCell />

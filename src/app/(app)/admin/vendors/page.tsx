@@ -33,6 +33,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Activity,
+  BarChart3,
+  BriefcaseBusiness,
   Plus,
   Pencil,
   Tags,
@@ -48,6 +51,7 @@ import {
   addVendorAlias,
   deleteVendorAlias,
   getActiveSalesManagers,
+  getVendorDetail,
 } from "./actions";
 
 interface Vendor {
@@ -68,6 +72,8 @@ interface Alias {
   alias: string;
 }
 
+type VendorDetail = Awaited<ReturnType<typeof getVendorDetail>>;
+
 type ActionResult = {
   success: boolean;
   error?: string;
@@ -75,6 +81,56 @@ type ActionResult = {
 
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
+}
+
+function formatUSD(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function formatPercent(value: number) {
+  return `${value.toFixed(1)}%`;
+}
+
+function formatDate(value: Date | string | null) {
+  return value ? new Date(value).toLocaleString("tr-TR") : "-";
+}
+
+function MetricCard({ label, value, subValue }: { label: string; value: string; subValue: string }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="text-[10px] font-extrabold uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="mt-1 truncate font-mono text-lg font-extrabold text-slate-950 dark:text-slate-100">{value}</div>
+      <div className="mt-0.5 truncate text-[11px] font-medium text-slate-500">{subValue}</div>
+    </div>
+  );
+}
+
+function VendorMetricBars({ detail }: { detail: VendorDetail }) {
+  const rows = [
+    { label: "Target", revenue: detail.totals.targetRevenue, gp: detail.totals.targetGp, tone: "bg-slate-500" },
+    { label: "Forecast", revenue: detail.totals.forecastRevenue, gp: detail.totals.forecastGp, tone: "bg-emerald-700" },
+    { label: "Backlog", revenue: detail.totals.backlogRevenue, gp: detail.totals.backlogGp, tone: "bg-amber-500" },
+    { label: "Closing", revenue: detail.totals.closingRevenue, gp: detail.totals.closingGp, tone: "bg-sky-600" },
+  ];
+  const maxRevenue = Math.max(1, ...rows.map((row) => row.revenue));
+
+  return (
+    <div className="space-y-3">
+      {rows.map((row) => (
+        <div key={row.label} className="grid grid-cols-[82px_1fr_110px] items-center gap-3">
+          <div className="text-xs font-bold text-slate-700 dark:text-slate-300">{row.label}</div>
+          <div className="h-3 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+            <div className={`h-full rounded-full ${row.tone}`} style={{ width: `${Math.max(4, (row.revenue / maxRevenue) * 100)}%` }} />
+          </div>
+          <div className="text-right font-mono text-xs font-bold text-slate-800 dark:text-slate-200">{formatUSD(row.revenue)}</div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /**
@@ -132,6 +188,12 @@ export default function VendorsPage() {
   const [isLoadingAliases, setIsLoadingAliases] = useState(false);
   const [newAliasText, setNewAliasText] = useState("");
   const [isAddingAlias, setIsAddingAlias] = useState(false);
+
+  // Vendor detail state
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [detailVendor, setDetailVendor] = useState<Vendor | null>(null);
+  const [vendorDetail, setVendorDetail] = useState<VendorDetail | null>(null);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
 
   // Delete/Deactivate alert states
   const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
@@ -246,6 +308,21 @@ export default function VendorsPage() {
       toast.error("Takma adlar yüklenemedi.");
     } finally {
       setIsLoadingAliases(false);
+    }
+  };
+
+  const handleOpenDetail = async (vendor: Vendor) => {
+    setDetailVendor(vendor);
+    setVendorDetail(null);
+    setIsDetailModalOpen(true);
+    setIsLoadingDetail(true);
+    try {
+      const detail = await getVendorDetail(vendor.id);
+      setVendorDetail(detail);
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err, "Vendor detayları yüklenemedi."));
+    } finally {
+      setIsLoadingDetail(false);
     }
   };
 
@@ -384,7 +461,16 @@ export default function VendorsPage() {
           {vendors.map((vendor) => (
             <div
               key={vendor.id}
-              className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-lg hover:-translate-y-1 transition-all duration-300 p-5 flex flex-col justify-between space-y-4 border-t-4 border-t-[#2E5A43] dark:border-t-emerald-600"
+              role="button"
+              tabIndex={0}
+              onClick={() => void handleOpenDetail(vendor)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  void handleOpenDetail(vendor);
+                }
+              }}
+              className="cursor-pointer bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-lg hover:-translate-y-1 transition-all duration-300 p-5 flex flex-col justify-between space-y-4 border-t-4 border-t-[#2E5A43] dark:border-t-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-700/30"
             >
               {/* Header */}
               <div className="flex items-start gap-3">
@@ -439,7 +525,10 @@ export default function VendorsPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => handleOpenEdit(vendor)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleOpenEdit(vendor);
+                  }}
                   className="h-8 text-xs border-slate-200 text-slate-700 hover:bg-slate-50 flex items-center gap-1 font-sans"
                 >
                   <Pencil className="h-3.5 w-3.5" />
@@ -448,7 +537,10 @@ export default function VendorsPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => handleOpenAliases(vendor)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void handleOpenAliases(vendor);
+                  }}
                   className="h-8 text-xs border-slate-200 text-slate-700 hover:bg-slate-50 flex items-center gap-1 font-sans"
                   title="Takma Adları Yönet"
                 >
@@ -458,7 +550,10 @@ export default function VendorsPage() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => handleOpenDeleteAlert(vendor)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleOpenDeleteAlert(vendor);
+                  }}
                   className="h-8 w-8 text-slate-400 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20"
                 >
                   <Trash2 className="h-4 w-4" />
@@ -468,6 +563,212 @@ export default function VendorsPage() {
           ))}
         </div>
       )}
+
+      {/* Vendor Detail Dialog */}
+      <Dialog open={isDetailModalOpen} onOpenChange={setIsDetailModalOpen}>
+        <DialogContent className="max-h-[88vh] overflow-y-auto bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 sm:max-w-5xl">
+          <DialogHeader>
+            <DialogTitle className="font-serif text-[#1F3A2E] dark:text-emerald-400 text-2xl font-bold">
+              {vendorDetail?.vendor.name ?? detailVendor?.name ?? "Vendor Detayı"}
+            </DialogTitle>
+            <DialogDescription className="text-slate-500 font-sans text-xs">
+              Vendor bazlı tanım, işlem sayıları, finansal toplamlar ve dönemsel hareketler.
+            </DialogDescription>
+          </DialogHeader>
+
+          {isLoadingDetail ? (
+            <div className="flex h-56 items-center justify-center">
+              <Loader2 className="h-8 w-8 animate-spin text-emerald-700" />
+              <span className="ml-2 text-sm font-medium text-slate-500">Vendor detayı yükleniyor...</span>
+            </div>
+          ) : vendorDetail ? (
+            <div className="space-y-5">
+              <div className="flex flex-col gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/30 md:flex-row md:items-center md:justify-between">
+                <div className="flex items-center gap-3">
+                  <VendorLogo logoUrl={vendorDetail.vendor.logoUrl} name={vendorDetail.vendor.name} />
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-serif text-xl font-bold text-slate-950 dark:text-slate-100">{vendorDetail.vendor.name}</h3>
+                      {vendorDetail.vendor.isActive ? (
+                        <Badge className="bg-emerald-800 text-emerald-50 hover:bg-emerald-800">Aktif</Badge>
+                      ) : (
+                        <Badge variant="destructive">Pasif</Badge>
+                      )}
+                    </div>
+                    <div className="mt-1 text-xs font-medium text-slate-500">
+                      Kod {vendorDetail.vendor.code || "-"} • Sorumlu {vendorDetail.vendor.managerName || "Atanmamış"}
+                    </div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <MetricCard label="Forecast" value={vendorDetail.counts.forecasts.toString()} subValue="kayıt" />
+                  <MetricCard label="Target" value={vendorDetail.counts.targets.toString()} subValue="kayıt" />
+                  <MetricCard label="Backlog" value={vendorDetail.counts.actuals.toString()} subValue="kayıt" />
+                  <MetricCard label="Closing" value={vendorDetail.counts.closings.toString()} subValue="kayıt" />
+                </div>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                  <div className="mb-3 flex items-center gap-2">
+                    <BarChart3 className="h-4 w-4 text-emerald-700" />
+                    <h4 className="font-serif text-base font-bold text-[#1F3A2E] dark:text-emerald-400">Toplam Finansal Görünüm</h4>
+                  </div>
+                  <VendorMetricBars detail={vendorDetail} />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <MetricCard label="Target NSB" value={formatUSD(vendorDetail.totals.targetRevenue)} subValue={`GP% ${formatPercent(vendorDetail.totals.targetGpPercent)}`} />
+                  <MetricCard label="Target GP" value={formatUSD(vendorDetail.totals.targetGp)} subValue="Hedef brüt kar" />
+                  <MetricCard label="Forecast NSB" value={formatUSD(vendorDetail.totals.forecastRevenue)} subValue={`GP% ${formatPercent(vendorDetail.totals.forecastGpPercent)}`} />
+                  <MetricCard label="Forecast GP" value={formatUSD(vendorDetail.totals.forecastGp)} subValue="Aktif forecast brüt kar" />
+                </div>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
+                <div className="space-y-4">
+                  <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                    <div className="border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+                      <div className="flex items-center gap-2">
+                        <Activity className="h-4 w-4 text-emerald-700" />
+                        <h4 className="font-serif text-base font-bold text-[#1F3A2E] dark:text-emerald-400">Dönemsel NSB Verisi</h4>
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-emerald-800 text-emerald-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-xs font-extrabold uppercase tracking-wide">Dönem</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold uppercase tracking-wide">Target NSB</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold uppercase tracking-wide">Forecast NSB</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold uppercase tracking-wide">Backlog NSB</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold uppercase tracking-wide">Closing NSB</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {vendorDetail.periods.length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="px-3 py-8 text-center text-sm text-slate-500">
+                                Bu vendor için finansal veri bulunamadı.
+                              </td>
+                            </tr>
+                          ) : (
+                            vendorDetail.periods.map((period) => (
+                              <tr key={`nsb-${period.fiscalYear}-${period.quarter}`} className="border-b border-slate-100 last:border-0 dark:border-slate-800">
+                                <td className="px-3 py-2 font-bold text-slate-800 dark:text-slate-100">
+                                  FY{period.fiscalYear} Q{period.quarter}
+                                </td>
+                                <td className="px-3 py-2 text-right font-mono text-xs">{formatUSD(period.targetRevenue)}</td>
+                                <td className="px-3 py-2 text-right font-mono text-xs">
+                                  {formatUSD(period.forecastRevenue)}
+                                  {period.activeForecastWeek ? <span className="ml-1 text-[10px] text-slate-400">H{period.activeForecastWeek}</span> : null}
+                                </td>
+                                <td className="px-3 py-2 text-right font-mono text-xs">
+                                  {formatUSD(period.backlogRevenue)}
+                                  {period.latestBacklogWeek ? <span className="ml-1 text-[10px] text-slate-400">H{period.latestBacklogWeek}</span> : null}
+                                </td>
+                                <td className="px-3 py-2 text-right font-mono text-xs">{formatUSD(period.closingRevenue)}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                    <div className="border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+                      <div className="flex items-center gap-2">
+                        <Activity className="h-4 w-4 text-emerald-700" />
+                        <h4 className="font-serif text-base font-bold text-[#1F3A2E] dark:text-emerald-400">Dönemsel GP Verisi</h4>
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-emerald-800 text-emerald-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-xs font-extrabold uppercase tracking-wide">Dönem</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold uppercase tracking-wide">Target GP</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold uppercase tracking-wide">Forecast GP</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold uppercase tracking-wide">Backlog GP</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold uppercase tracking-wide">Closing GP</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {vendorDetail.periods.length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="px-3 py-8 text-center text-sm text-slate-500">
+                                Bu vendor için GP verisi bulunamadı.
+                              </td>
+                            </tr>
+                          ) : (
+                            vendorDetail.periods.map((period) => (
+                              <tr key={`gp-${period.fiscalYear}-${period.quarter}`} className="border-b border-slate-100 last:border-0 dark:border-slate-800">
+                                <td className="px-3 py-2 font-bold text-slate-800 dark:text-slate-100">
+                                  FY{period.fiscalYear} Q{period.quarter}
+                                </td>
+                                <td className="px-3 py-2 text-right font-mono text-xs">{formatUSD(period.targetGp)}</td>
+                                <td className="px-3 py-2 text-right font-mono text-xs">{formatUSD(period.forecastGp)}</td>
+                                <td className="px-3 py-2 text-right font-mono text-xs">{formatUSD(period.backlogGp)}</td>
+                                <td className="px-3 py-2 text-right font-mono text-xs">{formatUSD(period.closingGp)}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                    <div className="mb-3 flex items-center gap-2">
+                      <BriefcaseBusiness className="h-4 w-4 text-emerald-700" />
+                      <h4 className="font-serif text-base font-bold text-[#1F3A2E] dark:text-emerald-400">Tanım Bilgileri</h4>
+                    </div>
+                    <div className="space-y-2 text-xs">
+                      <div className="flex justify-between gap-3">
+                        <span className="font-semibold text-slate-500">Oluşturma</span>
+                        <span className="text-right text-slate-700 dark:text-slate-300">{formatDate(vendorDetail.vendor.createdAt)}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="font-semibold text-slate-500">Güncelleme</span>
+                        <span className="text-right text-slate-700 dark:text-slate-300">{formatDate(vendorDetail.vendor.updatedAt)}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="font-semibold text-slate-500">Yönetici Email</span>
+                        <span className="truncate text-right text-slate-700 dark:text-slate-300">{vendorDetail.vendor.managerEmail || "-"}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h4 className="font-serif text-base font-bold text-[#1F3A2E] dark:text-emerald-400">Takma Adlar</h4>
+                      <Badge variant="outline">{vendorDetail.aliases.length}</Badge>
+                    </div>
+                    <div className="flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
+                      {vendorDetail.aliases.length === 0 ? (
+                        <span className="text-xs text-slate-500">Takma ad yok.</span>
+                      ) : (
+                        vendorDetail.aliases.map((alias) => (
+                          <span key={alias.id} className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
+                            {alias.alias}
+                          </span>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-slate-100 bg-slate-50 p-6 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950/30">
+              Vendor detayı bulunamadı.
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Vendor Create/Edit Dialog */}
       <Dialog open={isVendorModalOpen} onOpenChange={setIsVendorModalOpen}>

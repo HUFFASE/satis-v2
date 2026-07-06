@@ -719,16 +719,16 @@ export default function ReportsClient({ initialData }: ReportsClientProps) {
         </div>
         <div className="overflow-x-auto">
           <Table>
-            <TableHeader>
+            <TableHeader className="bg-emerald-950 shadow-sm">
               <TableRow>
-                <TableHead className="min-w-56">Satış Müdürü / Vendor</TableHead>
-                <TableHead className="text-right">{labels.gp}</TableHead>
-                <TableHead className="text-right">Target GP</TableHead>
-                <TableHead className="text-right">GP Achv</TableHead>
-                <TableHead className="text-right">{labels.performance}</TableHead>
-                <TableHead className="text-right">{labels.revenue}</TableHead>
-                <TableHead className="text-right">Revenue Achv</TableHead>
-                <TableHead className="text-right">GP%</TableHead>
+                <TableHead className="min-w-56 bg-emerald-900 text-xs font-extrabold uppercase tracking-wide text-emerald-50">Satış Müdürü / Vendor</TableHead>
+                <TableHead className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">{labels.gp}</TableHead>
+                <TableHead className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">Target GP</TableHead>
+                <TableHead className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">GP Achv</TableHead>
+                <TableHead className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">{labels.performance}</TableHead>
+                <TableHead className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">{labels.revenue}</TableHead>
+                <TableHead className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">Revenue Achv</TableHead>
+                <TableHead className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">GP%</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -737,7 +737,7 @@ export default function ReportsClient({ initialData }: ReportsClientProps) {
                 const managerValues = getBasisValues(manager, reportBasis);
                 return (
                   <React.Fragment key={manager.id}>
-                    <TableRow className="cursor-pointer bg-slate-50/80 hover:bg-slate-100 dark:bg-slate-950/40 dark:hover:bg-slate-900" onClick={() => toggleManager(manager.id)}>
+                    <TableRow className="cursor-pointer border-l-4 border-emerald-700 bg-emerald-50/80 shadow-[inset_0_-1px_0_rgba(16,185,129,0.18)] hover:bg-emerald-100/80 dark:border-emerald-500 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/30" onClick={() => toggleManager(manager.id)}>
                       <TableCell className="font-semibold">
                         <div className="flex items-center gap-2">
                           {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -745,13 +745,13 @@ export default function ReportsClient({ initialData }: ReportsClientProps) {
                           <Badge variant="outline">{manager.vendors.length} vendor</Badge>
                         </div>
                       </TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(managerValues.gp)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs">{formatUSD(manager.targetGp)}</TableCell>
-                      <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(managerValues.gpAchievement)}`}>{formatPercent(managerValues.gpAchievement)}</TableCell>
-                      <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(managerValues.performance)}`}>{formatPercent(managerValues.performance)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs">{formatUSD(managerValues.revenue)}</TableCell>
-                      <TableCell className={`text-right font-mono text-xs ${getAchievementTone(managerValues.revenueAchievement)}`}>{formatPercent(managerValues.revenueAchievement)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs">{formatPercent(managerValues.gpPercent)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(managerValues.gp)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(manager.targetGp)}</TableCell>
+                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAchievementTone(managerValues.gpAchievement)}`}>{formatPercent(managerValues.gpAchievement)}</TableCell>
+                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAchievementTone(managerValues.performance)}`}>{formatPercent(managerValues.performance)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(managerValues.revenue)}</TableCell>
+                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAchievementTone(managerValues.revenueAchievement)}`}>{formatPercent(managerValues.revenueAchievement)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-800 dark:text-emerald-300">{formatPercent(managerValues.gpPercent)}</TableCell>
                     </TableRow>
                     {isExpanded
                       ? manager.vendors.map((vendor) => {

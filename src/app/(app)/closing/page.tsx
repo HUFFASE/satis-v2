@@ -25,10 +25,10 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
   Calendar,
   CheckCircle2,
@@ -83,6 +83,17 @@ interface ManagerClosingGroup {
   closedCount: number;
 }
 
+type ClosingSortKey =
+  | "managerName"
+  | "targetRevenue"
+  | "forecastRevenue"
+  | "closingRevenue"
+  | "closingGp"
+  | "closingGpPercent"
+  | "targetAchievement"
+  | "forecastAchievement";
+type SortDirection = "asc" | "desc";
+
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
@@ -124,6 +135,8 @@ export default function ClosingPage() {
   const [rows, setRows] = useState<ClosingRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedManagers, setExpandedManagers] = useState<Record<string, boolean>>({});
+  const [sortKey, setSortKey] = useState<ClosingSortKey>("managerName");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [isBulkUploadModalOpen, setIsBulkUploadModalOpen] = useState(false);
   const [bulkFile, setBulkFile] = useState<File | null>(null);
   const [bulkFileName, setBulkFileName] = useState("");
@@ -211,6 +224,35 @@ export default function ClosingPage() {
       }))
       .sort((a, b) => a.managerName.localeCompare(b.managerName, "tr"));
   }, [rows]);
+
+  const handleSort = (key: ClosingSortKey) => {
+    if (sortKey === key) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(key);
+    setSortDirection(key === "managerName" ? "asc" : "desc");
+  };
+
+  const sortedManagerGroups = useMemo(() => {
+    const getValue = (group: ManagerClosingGroup) => {
+      if (sortKey === "managerName") return group.managerName;
+      if (sortKey === "closingGpPercent") return calculateGpPercent(group.closingRevenue, group.closingGp);
+      if (sortKey === "targetAchievement") return calculatePercent(group.closingRevenue, group.targetRevenue);
+      if (sortKey === "forecastAchievement") return calculatePercent(group.closingRevenue, group.forecastRevenue);
+      return group[sortKey];
+    };
+
+    return [...managerGroups].sort((a, b) => {
+      const left = getValue(a);
+      const right = getValue(b);
+      const result =
+        typeof left === "string" && typeof right === "string"
+          ? left.localeCompare(right, "tr")
+          : Number(left) - Number(right);
+      return sortDirection === "asc" ? result : -result;
+    });
+  }, [managerGroups, sortDirection, sortKey]);
 
   const toggleManager = (managerId: string) => {
     setExpandedManagers((current) => ({
@@ -365,20 +407,20 @@ export default function ClosingPage() {
           </div>
         ) : (
           <Table>
-            <TableHeader className="bg-slate-50 dark:bg-slate-800/50">
+            <TableHeader className="bg-emerald-950 shadow-sm">
               <TableRow>
-                <TableHead>Satış Müdürü / Vendor</TableHead>
-                <TableHead className="text-right">Target NSB</TableHead>
-                <TableHead className="text-right">Forecast NSB</TableHead>
-                <TableHead className="text-right">Kapanış NSB</TableHead>
-                <TableHead className="text-right">Kapanış GP</TableHead>
-                <TableHead className="text-right">GP%</TableHead>
-                <TableHead className="text-right">Target Achv</TableHead>
-                <TableHead className="text-right">Forecast Achv</TableHead>
+                <SortableTableHead label="Satış Müdürü / Vendor" active={sortKey === "managerName"} direction={sortDirection} onClick={() => handleSort("managerName")} />
+                <SortableTableHead label="Target NSB" align="right" active={sortKey === "targetRevenue"} direction={sortDirection} onClick={() => handleSort("targetRevenue")} />
+                <SortableTableHead label="Forecast NSB" align="right" active={sortKey === "forecastRevenue"} direction={sortDirection} onClick={() => handleSort("forecastRevenue")} />
+                <SortableTableHead label="Kapanış NSB" align="right" active={sortKey === "closingRevenue"} direction={sortDirection} onClick={() => handleSort("closingRevenue")} />
+                <SortableTableHead label="Kapanış GP" align="right" active={sortKey === "closingGp"} direction={sortDirection} onClick={() => handleSort("closingGp")} />
+                <SortableTableHead label="GP%" align="right" active={sortKey === "closingGpPercent"} direction={sortDirection} onClick={() => handleSort("closingGpPercent")} />
+                <SortableTableHead label="Target Achv" align="right" active={sortKey === "targetAchievement"} direction={sortDirection} onClick={() => handleSort("targetAchievement")} />
+                <SortableTableHead label="Forecast Achv" align="right" active={sortKey === "forecastAchievement"} direction={sortDirection} onClick={() => handleSort("forecastAchievement")} />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {managerGroups.map((group) => {
+              {sortedManagerGroups.map((group) => {
                 const isExpanded = expandedManagers[group.id] ?? false;
                 const ToggleIcon = isExpanded ? ChevronDown : ChevronRight;
                 const groupTargetAchievement = calculatePercent(group.closingRevenue, group.targetRevenue);
@@ -387,7 +429,7 @@ export default function ClosingPage() {
 
                 return (
                   <React.Fragment key={group.id}>
-                    <TableRow className="bg-slate-50/80 hover:bg-slate-100/80 dark:bg-slate-800/40">
+                    <TableRow className="border-l-4 border-emerald-700 bg-emerald-50/80 shadow-[inset_0_-1px_0_rgba(16,185,129,0.18)] hover:bg-emerald-100/80 dark:border-emerald-500 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/30">
                       <TableCell>
                         <button
                           type="button"
@@ -404,13 +446,13 @@ export default function ClosingPage() {
                           </span>
                         </button>
                       </TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(group.targetRevenue)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(group.forecastRevenue)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(group.closingRevenue)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(group.closingGp)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatPercent(groupGpPercent)}</TableCell>
-                      <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(groupTargetAchievement)}`}>{formatPercent(groupTargetAchievement)}</TableCell>
-                      <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(groupForecastAchievement)}`}>{formatPercent(groupForecastAchievement)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.targetRevenue)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.forecastRevenue)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.closingRevenue)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.closingGp)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-800 dark:text-emerald-300">{formatPercent(groupGpPercent)}</TableCell>
+                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAchievementTone(groupTargetAchievement)}`}>{formatPercent(groupTargetAchievement)}</TableCell>
+                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAchievementTone(groupForecastAchievement)}`}>{formatPercent(groupForecastAchievement)}</TableCell>
                     </TableRow>
                     {isExpanded &&
                       group.rows.map((row) => (
@@ -435,15 +477,15 @@ export default function ClosingPage() {
                   </React.Fragment>
                 );
               })}
-              <TableRow className="border-t-2 border-slate-200 bg-slate-50/70 font-bold dark:border-slate-800 dark:bg-slate-800/30">
+              <TableRow className="border-t-2 border-emerald-800 bg-[#1F3A2E] font-bold text-white hover:bg-[#1F3A2E] dark:border-emerald-500 dark:bg-emerald-950">
                 <TableCell>GENEL TOPLAM ({totals.closedCount}/{rows.length})</TableCell>
-                <TableCell className="text-right font-mono text-xs">{formatUSD(totals.targetRevenue)}</TableCell>
-                <TableCell className="text-right font-mono text-xs">{formatUSD(totals.forecastRevenue)}</TableCell>
-                <TableCell className="text-right font-mono text-xs">{formatUSD(totals.closingRevenue)}</TableCell>
-                <TableCell className="text-right font-mono text-xs">{formatUSD(totals.closingGp)}</TableCell>
-                <TableCell className="text-right font-mono text-xs">{formatPercent(closingGpPercent)}</TableCell>
-                <TableCell className={`text-right font-mono text-xs ${getAchievementTone(targetAchievement)}`}>{formatPercent(targetAchievement)}</TableCell>
-                <TableCell className={`text-right font-mono text-xs ${getAchievementTone(forecastAchievement)}`}>{formatPercent(forecastAchievement)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold">{formatUSD(totals.targetRevenue)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold">{formatUSD(totals.forecastRevenue)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold">{formatUSD(totals.closingRevenue)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold">{formatUSD(totals.closingGp)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-100">{formatPercent(closingGpPercent)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-100">{formatPercent(targetAchievement)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-100">{formatPercent(forecastAchievement)}</TableCell>
               </TableRow>
             </TableBody>
           </Table>

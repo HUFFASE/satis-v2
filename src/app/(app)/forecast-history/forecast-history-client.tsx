@@ -508,16 +508,16 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
         </div>
 
         <Table>
-          <TableHeader className="bg-slate-50 dark:bg-slate-800/50">
+          <TableHeader className="bg-emerald-950 shadow-sm">
             <TableRow>
-              <TableHead>Satış Müdürü / Marka</TableHead>
-              <TableHead className="text-center">Durum</TableHead>
-              <TableHead className="text-center">Hafta</TableHead>
-              <TableHead className="text-right">NSB</TableHead>
-              <TableHead className="text-right">GP</TableHead>
-              <TableHead className="text-right">GP%</TableHead>
-              <TableHead className="text-right">NSB Accuracy</TableHead>
-              <TableHead className="text-right">Güncelleme</TableHead>
+              <TableHead className="bg-emerald-900 text-xs font-extrabold uppercase tracking-wide text-emerald-50">Satış Müdürü / Marka</TableHead>
+              <TableHead className="bg-emerald-900 text-center text-xs font-extrabold uppercase tracking-wide text-emerald-50">Durum</TableHead>
+              <TableHead className="bg-emerald-900 text-center text-xs font-extrabold uppercase tracking-wide text-emerald-50">Hafta</TableHead>
+              <TableHead className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">NSB</TableHead>
+              <TableHead className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">GP</TableHead>
+              <TableHead className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">GP%</TableHead>
+              <TableHead className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">NSB Accuracy</TableHead>
+              <TableHead className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">Güncelleme</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -534,7 +534,7 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
 
                 return (
                   <React.Fragment key={manager.id}>
-                    <TableRow className="bg-slate-50/80 hover:bg-slate-100/80 dark:bg-slate-800/40">
+                    <TableRow className="border-l-4 border-emerald-700 bg-emerald-50/80 shadow-[inset_0_-1px_0_rgba(16,185,129,0.18)] hover:bg-emerald-100/80 dark:border-emerald-500 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/30">
                       <TableCell>
                         <button
                           type="button"
@@ -556,11 +556,11 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
                       <TableCell className="text-center">
                         <Badge variant="outline">{manager.activeCount > 0 ? "Aktif var" : "Arşiv"}</Badge>
                       </TableCell>
-                      <TableCell className="text-center text-xs text-slate-500">Toplam</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(manager.revenue)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(manager.gp)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatPercent(manager.gpPercent)}</TableCell>
-                      <TableCell className={`text-right font-mono text-xs font-bold ${getAccuracyTone(manager.revenueAccuracy)}`}>
+                      <TableCell className="text-center text-xs text-slate-500">Aktif</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(manager.revenue)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(manager.gp)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-800 dark:text-emerald-300">{formatPercent(manager.gpPercent)}</TableCell>
+                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAccuracyTone(manager.revenueAccuracy)}`}>
                         {formatPercent(manager.revenueAccuracy)}
                       </TableCell>
                       <TableCell />
@@ -605,7 +605,7 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
 
                 return (
                   <React.Fragment key={manager.id}>
-                    <TableRow className="bg-slate-50/80 hover:bg-slate-100/80 dark:bg-slate-800/40">
+                    <TableRow className="border-l-4 border-emerald-700 bg-emerald-50/80 shadow-[inset_0_-1px_0_rgba(16,185,129,0.18)] hover:bg-emerald-100/80 dark:border-emerald-500 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/30">
                       <TableCell>
                         <button
                           type="button"
@@ -627,11 +627,11 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
                       <TableCell className="text-center">
                         <Badge variant="outline">{manager.vendors.length} vendor</Badge>
                       </TableCell>
-                      <TableCell className="text-center text-xs text-slate-500">Toplam</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(manager.revenue)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(manager.gp)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatPercent(manager.gpPercent)}</TableCell>
-                      <TableCell className={`text-right font-mono text-xs font-bold ${getAccuracyTone(manager.revenueAccuracy)}`}>
+                      <TableCell className="text-center text-xs text-slate-500">Aktif</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(manager.revenue)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(manager.gp)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-800 dark:text-emerald-300">{formatPercent(manager.gpPercent)}</TableCell>
+                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAccuracyTone(manager.revenueAccuracy)}`}>
                         {formatPercent(manager.revenueAccuracy)}
                       </TableCell>
                       <TableCell />
@@ -644,7 +644,7 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
 
                         return (
                           <React.Fragment key={vendorKey}>
-                            <TableRow className="bg-white hover:bg-slate-50/60 dark:bg-slate-900 dark:hover:bg-slate-800/30">
+                            <TableRow className="border-l-4 border-emerald-600 bg-white hover:bg-emerald-50/70 dark:border-emerald-500 dark:bg-slate-900 dark:hover:bg-emerald-950/20">
                               <TableCell className="pl-12">
                                 <button
                                   type="button"
@@ -663,11 +663,11 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
                               <TableCell className="text-center">
                                 <Badge variant="outline">{vendor.activeCount > 0 ? "Aktif var" : "Arşiv"}</Badge>
                               </TableCell>
-                              <TableCell className="text-center text-xs text-slate-500">Toplam</TableCell>
-                              <TableCell className="text-right font-mono text-xs">{formatUSD(vendor.revenue)}</TableCell>
-                              <TableCell className="text-right font-mono text-xs">{formatUSD(vendor.gp)}</TableCell>
-                              <TableCell className="text-right font-mono text-xs font-bold">{formatPercent(vendor.gpPercent)}</TableCell>
-                              <TableCell className={`text-right font-mono text-xs font-bold ${getAccuracyTone(vendor.revenueAccuracy)}`}>
+                              <TableCell className="text-center text-xs text-slate-500">Aktif</TableCell>
+                              <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(vendor.revenue)}</TableCell>
+                              <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(vendor.gp)}</TableCell>
+                              <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-800 dark:text-emerald-300">{formatPercent(vendor.gpPercent)}</TableCell>
+                              <TableCell className={`text-right font-mono text-sm font-extrabold ${getAccuracyTone(vendor.revenueAccuracy)}`}>
                                 {formatPercent(vendor.revenueAccuracy)}
                               </TableCell>
                               <TableCell />

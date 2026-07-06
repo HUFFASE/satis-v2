@@ -113,6 +113,193 @@ export async function getVendors() {
   }));
 }
 
+function calculateGpPercent(revenue: number, gp: number) {
+  return revenue > 0 ? (gp / revenue) * 100 : 0;
+}
+
+export async function getVendorDetail(vendorId: string) {
+  await requireDirector();
+
+  const vendor = await prisma.vendor.findUnique({
+    where: { id: vendorId },
+    include: {
+      manager: { select: { id: true, name: true, email: true } },
+      aliases: { orderBy: { alias: "asc" } },
+      _count: {
+        select: {
+          aliases: true,
+          forecasts: true,
+          targets: true,
+          actuals: true,
+          closings: true,
+        },
+      },
+    },
+  });
+
+  if (!vendor) {
+    throw new Error("Vendor bulunamadı.");
+  }
+
+  const [targets, forecasts, actuals, closings] = await Promise.all([
+    prisma.target.findMany({
+      where: { vendorId },
+      include: { fiscalPeriod: true },
+      orderBy: [{ fiscalPeriod: { fiscalYear: "asc" } }, { fiscalPeriod: { quarter: "asc" } }],
+    }),
+    prisma.forecast.findMany({
+      where: { vendorId },
+      include: { fiscalPeriod: true, submittedBy: { select: { name: true } } },
+      orderBy: [{ fiscalPeriod: { fiscalYear: "asc" } }, { fiscalPeriod: { quarter: "asc" } }, { weekNumber: "asc" }],
+    }),
+    prisma.actual.findMany({
+      where: { vendorId },
+      include: { fiscalPeriod: true },
+      orderBy: [{ fiscalPeriod: { fiscalYear: "asc" } }, { fiscalPeriod: { quarter: "asc" } }, { weekNumber: "asc" }],
+    }),
+    prisma.closing.findMany({
+      where: { vendorId },
+      include: { fiscalPeriod: true },
+      orderBy: [{ fiscalPeriod: { fiscalYear: "asc" } }, { fiscalPeriod: { quarter: "asc" } }],
+    }),
+  ]);
+
+  const periodMap = new Map<
+    string,
+    {
+      fiscalYear: number;
+      quarter: number;
+      targetRevenue: number;
+      targetGp: number;
+      forecastRevenue: number;
+      forecastGp: number;
+      backlogRevenue: number;
+      backlogGp: number;
+      closingRevenue: number;
+      closingGp: number;
+      activeForecastWeek: number | null;
+      latestBacklogWeek: number | null;
+    }
+  >();
+
+  function periodRow(period: { id: string; fiscalYear: number; quarter: number }) {
+    const existing = periodMap.get(period.id);
+    if (existing) return existing;
+    const row = {
+      fiscalYear: period.fiscalYear,
+      quarter: period.quarter,
+      targetRevenue: 0,
+      targetGp: 0,
+      forecastRevenue: 0,
+      forecastGp: 0,
+      backlogRevenue: 0,
+      backlogGp: 0,
+      closingRevenue: 0,
+      closingGp: 0,
+      activeForecastWeek: null,
+      latestBacklogWeek: null,
+    };
+    periodMap.set(period.id, row);
+    return row;
+  }
+
+  for (const target of targets) {
+    const row = periodRow(target.fiscalPeriod);
+    row.targetRevenue += Number(target.revenue);
+    row.targetGp += Number(target.gp);
+  }
+
+  for (const forecast of forecasts) {
+    if (!forecast.isActive) continue;
+    const row = periodRow(forecast.fiscalPeriod);
+    row.forecastRevenue += Number(forecast.revenue);
+    row.forecastGp += Number(forecast.gp);
+    row.activeForecastWeek = forecast.weekNumber;
+  }
+
+  for (const actual of actuals) {
+    const row = periodRow(actual.fiscalPeriod);
+    row.backlogRevenue += Number(actual.backlog);
+    row.backlogGp += Number(actual.invoiced);
+    row.latestBacklogWeek = Math.max(row.latestBacklogWeek ?? 0, actual.weekNumber);
+  }
+
+  for (const closing of closings) {
+    const row = periodRow(closing.fiscalPeriod);
+    row.closingRevenue += Number(closing.revenue);
+    row.closingGp += Number(closing.gp);
+  }
+
+  const periods = Array.from(periodMap.values()).sort(
+    (a, b) => b.fiscalYear - a.fiscalYear || b.quarter - a.quarter
+  );
+
+  const totals = periods.reduce(
+    (acc, row) => {
+      acc.targetRevenue += row.targetRevenue;
+      acc.targetGp += row.targetGp;
+      acc.forecastRevenue += row.forecastRevenue;
+      acc.forecastGp += row.forecastGp;
+      acc.backlogRevenue += row.backlogRevenue;
+      acc.backlogGp += row.backlogGp;
+      acc.closingRevenue += row.closingRevenue;
+      acc.closingGp += row.closingGp;
+      return acc;
+    },
+    {
+      targetRevenue: 0,
+      targetGp: 0,
+      forecastRevenue: 0,
+      forecastGp: 0,
+      backlogRevenue: 0,
+      backlogGp: 0,
+      closingRevenue: 0,
+      closingGp: 0,
+    }
+  );
+
+  return {
+    vendor: {
+      id: vendor.id,
+      name: vendor.name,
+      code: vendor.code,
+      logoUrl: vendor.logoUrl,
+      isActive: vendor.isActive,
+      managerId: vendor.managerId,
+      managerName: vendor.manager?.name ?? null,
+      managerEmail: vendor.manager?.email ?? null,
+      createdAt: vendor.createdAt.toISOString(),
+      updatedAt: vendor.updatedAt.toISOString(),
+    },
+    aliases: vendor.aliases.map((alias) => ({
+      id: alias.id,
+      alias: alias.alias,
+      createdAt: alias.createdAt.toISOString(),
+    })),
+    counts: {
+      aliases: vendor._count.aliases,
+      forecasts: vendor._count.forecasts,
+      targets: vendor._count.targets,
+      actuals: vendor._count.actuals,
+      closings: vendor._count.closings,
+    },
+    totals: {
+      ...totals,
+      targetGpPercent: calculateGpPercent(totals.targetRevenue, totals.targetGp),
+      forecastGpPercent: calculateGpPercent(totals.forecastRevenue, totals.forecastGp),
+      backlogGpPercent: calculateGpPercent(totals.backlogRevenue, totals.backlogGp),
+      closingGpPercent: calculateGpPercent(totals.closingRevenue, totals.closingGp),
+    },
+    periods: periods.map((row) => ({
+      ...row,
+      targetGpPercent: calculateGpPercent(row.targetRevenue, row.targetGp),
+      forecastGpPercent: calculateGpPercent(row.forecastRevenue, row.forecastGp),
+      backlogGpPercent: calculateGpPercent(row.backlogRevenue, row.backlogGp),
+      closingGpPercent: calculateGpPercent(row.closingRevenue, row.closingGp),
+    })),
+  };
+}
+
 /**
  * Creates a vendor with an uppercase-normalized canonical name and optionally associates a single manager.
  */

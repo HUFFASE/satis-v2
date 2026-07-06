@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
   Dialog,
   DialogContent,
@@ -67,6 +68,9 @@ interface ManagerActualGroup {
   latestUpdatedAt: Date | string | null;
 }
 
+type ActualSortKey = "managerName" | "backlog" | "invoiced" | "gpPercent" | "latestUpdatedAt";
+type SortDirection = "asc" | "desc";
+
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
@@ -84,6 +88,8 @@ export default function ActualsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState<{ role?: string | null } | null>(null);
   const [expandedManagers, setExpandedManagers] = useState<Record<string, boolean>>({});
+  const [sortKey, setSortKey] = useState<ActualSortKey>("managerName");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
 
   // Edit states
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -241,6 +247,34 @@ export default function ActualsPage() {
       a.managerName.localeCompare(b.managerName, "tr")
     );
   }, [actuals]);
+
+  const handleSort = (key: ActualSortKey) => {
+    if (sortKey === key) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(key);
+    setSortDirection(key === "managerName" ? "asc" : "desc");
+  };
+
+  const sortedManagerGroups = useMemo(() => {
+    const getValue = (group: ManagerActualGroup) => {
+      if (sortKey === "managerName") return group.managerName;
+      if (sortKey === "gpPercent") return group.backlog > 0 ? (group.invoiced / group.backlog) * 100 : 0;
+      if (sortKey === "latestUpdatedAt") return group.latestUpdatedAt ? new Date(group.latestUpdatedAt).getTime() : 0;
+      return group[sortKey];
+    };
+
+    return [...managerGroups].sort((a, b) => {
+      const left = getValue(a);
+      const right = getValue(b);
+      const result =
+        typeof left === "string" && typeof right === "string"
+          ? left.localeCompare(right, "tr")
+          : Number(left) - Number(right);
+      return sortDirection === "asc" ? result : -result;
+    });
+  }, [managerGroups, sortDirection, sortKey]);
 
   const toggleManager = (managerId: string) => {
     setExpandedManagers((current) => ({
@@ -448,25 +482,25 @@ export default function ActualsPage() {
           </div>
         ) : (
           <Table>
-            <TableHeader className="bg-slate-50 dark:bg-slate-800/50">
+            <TableHeader className="bg-emerald-950 shadow-sm">
               <TableRow>
-                <TableHead className="font-semibold text-slate-700 dark:text-slate-300">Satış Müdürü / Vendor</TableHead>
-                <TableHead className="text-right font-semibold text-slate-700 dark:text-slate-300">Revenue (USD)</TableHead>
-                <TableHead className="text-right font-semibold text-slate-700 dark:text-slate-300">GP (USD)</TableHead>
-                <TableHead className="text-right font-semibold text-slate-700 dark:text-slate-300 w-32">GP%</TableHead>
-                <TableHead className="text-center font-semibold text-slate-700 dark:text-slate-300 w-44">Son Güncelleme</TableHead>
-                <TableHead className="text-right font-semibold text-slate-700 dark:text-slate-300 w-32">İşlem</TableHead>
+                <SortableTableHead label="Satış Müdürü / Vendor" active={sortKey === "managerName"} direction={sortDirection} onClick={() => handleSort("managerName")} />
+                <SortableTableHead label="Revenue (USD)" align="right" active={sortKey === "backlog"} direction={sortDirection} onClick={() => handleSort("backlog")} />
+                <SortableTableHead label="GP (USD)" align="right" active={sortKey === "invoiced"} direction={sortDirection} onClick={() => handleSort("invoiced")} />
+                <SortableTableHead label="GP%" align="right" active={sortKey === "gpPercent"} direction={sortDirection} onClick={() => handleSort("gpPercent")} className="w-32" />
+                <SortableTableHead label="Son Güncelleme" align="center" active={sortKey === "latestUpdatedAt"} direction={sortDirection} onClick={() => handleSort("latestUpdatedAt")} className="w-44" />
+                <TableHead className="w-32 bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">İşlem</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {managerGroups.map((group) => {
+              {sortedManagerGroups.map((group) => {
                 const isExpanded = expandedManagers[group.id] ?? false;
                 const ToggleIcon = isExpanded ? ChevronDown : ChevronRight;
                 return (
                   <React.Fragment key={group.id}>
                     <TableRow
                       aria-expanded={isExpanded}
-                      className="bg-slate-50/80 hover:bg-slate-100/80 dark:bg-slate-800/40 dark:hover:bg-slate-800/60"
+                      className="border-l-4 border-emerald-700 bg-emerald-50/80 shadow-[inset_0_-1px_0_rgba(16,185,129,0.18)] hover:bg-emerald-100/80 dark:border-emerald-500 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/30"
                     >
                       <TableCell className="font-semibold text-slate-950 dark:text-slate-100">
                         <button
@@ -486,9 +520,9 @@ export default function ActualsPage() {
                           </span>
                         </button>
                       </TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(group.backlog)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{formatUSD(group.invoiced)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold text-emerald-800 dark:text-emerald-400">
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.backlog)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.invoiced)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-800 dark:text-emerald-300">
                         {formatPercent(group.backlog, group.invoiced)}
                       </TableCell>
                       <TableCell className="text-center text-slate-500 font-sans text-[11px]">
@@ -544,11 +578,11 @@ export default function ActualsPage() {
               })}
 
               {/* Summary Bottom Row */}
-              <TableRow className="bg-slate-50/70 hover:bg-slate-50/70 dark:bg-slate-800/30 dark:hover:bg-slate-800/30 font-bold border-t-2 border-slate-200 dark:border-slate-800">
+              <TableRow className="border-t-2 border-emerald-800 bg-[#1F3A2E] font-bold text-white hover:bg-[#1F3A2E] dark:border-emerald-500 dark:bg-emerald-950">
                 <TableCell>GENEL TOPLAM</TableCell>
-                <TableCell className="text-right font-mono text-xs">{formatUSD(totalRevenue)}</TableCell>
-                <TableCell className="text-right font-mono text-xs">{formatUSD(totalGP)}</TableCell>
-                <TableCell className="text-right font-mono text-xs text-emerald-800 dark:text-emerald-400">
+                <TableCell className="text-right font-mono text-sm font-extrabold">{formatUSD(totalRevenue)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold">{formatUSD(totalGP)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-100">
                   {totalRevenue > 0 ? `${totalGPPercent.toFixed(1)}%` : "0.0%"}
                 </TableCell>
                 <TableCell colSpan={2} />

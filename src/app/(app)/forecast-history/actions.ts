@@ -204,11 +204,13 @@ export async function getForecastHistoryData(fiscalYear: number, quarter: number
       };
 
     group.rows.push(row);
-    group.revenue += row.revenue;
-    group.gp += row.gp;
-    if (row.revenueAccuracy > 0) group.revenueAccuracyValues.push(row.revenueAccuracy);
-    if (row.gpAccuracy > 0) group.gpAccuracyValues.push(row.gpAccuracy);
-    if (row.isActive) group.activeCount += 1;
+    if (row.isActive) {
+      group.revenue += row.revenue;
+      group.gp += row.gp;
+      if (row.revenueAccuracy > 0) group.revenueAccuracyValues.push(row.revenueAccuracy);
+      if (row.gpAccuracy > 0) group.gpAccuracyValues.push(row.gpAccuracy);
+      group.activeCount += 1;
+    }
 
     managerWeek.rows.push(row);
     managerWeek.revenue += row.revenue;
@@ -220,11 +222,13 @@ export async function getForecastHistoryData(fiscalYear: number, quarter: number
     if (row.updatedAt > managerWeek.updatedAt) managerWeek.updatedAt = row.updatedAt;
 
     vendorGroup.rows.push(row);
-    vendorGroup.revenue += row.revenue;
-    vendorGroup.gp += row.gp;
-    if (row.revenueAccuracy > 0) vendorGroup.revenueAccuracyValues.push(row.revenueAccuracy);
-    if (row.gpAccuracy > 0) vendorGroup.gpAccuracyValues.push(row.gpAccuracy);
-    if (row.isActive) vendorGroup.activeCount += 1;
+    if (row.isActive) {
+      vendorGroup.revenue += row.revenue;
+      vendorGroup.gp += row.gp;
+      if (row.revenueAccuracy > 0) vendorGroup.revenueAccuracyValues.push(row.revenueAccuracy);
+      if (row.gpAccuracy > 0) vendorGroup.gpAccuracyValues.push(row.gpAccuracy);
+      vendorGroup.activeCount += 1;
+    }
     group.vendorMap.set(row.vendorId, vendorGroup);
     group.weeklyMap.set(row.weekNumber, managerWeek);
     managerMap.set(row.managerId, group);

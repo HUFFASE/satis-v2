@@ -252,6 +252,7 @@ export async function getActiveForecasts(fiscalYear: number, quarter: number) {
 
   const currentContext = getFiscalContext(new Date());
   const isCurrentFiscalPeriod = currentContext.fiscalYear === fiscalYear && currentContext.quarter === quarter;
+  const activeBacklogWeekNumber = currentContext.weekInQuarter;
   const accessibleVendorIds = await getAccessibleVendorIds(session.user);
   const period = await ensureFiscalPeriod(fiscalYear, quarter);
 
@@ -282,21 +283,33 @@ export async function getActiveForecasts(fiscalYear: number, quarter: number) {
   });
   const forecastMap = new Map(forecasts.map((forecast) => [forecast.vendorId, forecast]));
 
-  const targets = await prisma.target.findMany({
-    where: {
-      vendorId: { in: accessibleVendorIds },
-      fiscalPeriodId: period.id,
-    },
-  });
+  const [targets, actuals] = await Promise.all([
+    prisma.target.findMany({
+      where: {
+        vendorId: { in: accessibleVendorIds },
+        fiscalPeriodId: period.id,
+      },
+    }),
+    prisma.actual.findMany({
+      where: {
+        vendorId: { in: accessibleVendorIds },
+        fiscalPeriodId: period.id,
+        weekNumber: activeBacklogWeekNumber,
+      },
+    }),
+  ]);
   const targetMap = new Map(targets.map((target) => [target.vendorId, target]));
+  const actualMap = new Map(actuals.map((actual) => [actual.vendorId, actual]));
 
   return vendors.map((vendor) => {
     const forecast = forecastMap.get(vendor.id);
     const target = targetMap.get(vendor.id);
+    const actual = actualMap.get(vendor.id);
     const forecastRevenue = forecast ? Number(forecast.revenue) : 0;
     const forecastGp = forecast ? Number(forecast.gp) : 0;
     const targetRevenue = target ? Number(target.revenue) : 0;
     const targetGp = target ? Number(target.gp) : 0;
+    const backlogRevenue = actual ? Number(actual.backlog) : 0;
 
     return {
       vendorId: vendor.id,
@@ -315,6 +328,10 @@ export async function getActiveForecasts(fiscalYear: number, quarter: number) {
       submittedAt: forecast?.updatedAt ?? null,
       hasForecast: Boolean(forecast),
       hasTarget: Boolean(target),
+      backlogRevenue,
+      backlogWeekNumber: activeBacklogWeekNumber,
+      hasBacklog: Boolean(actual),
+      isBelowBacklog: Boolean(forecast && actual && forecastRevenue < backlogRevenue),
       isPeriodLocked: period.isLocked,
     };
   });
