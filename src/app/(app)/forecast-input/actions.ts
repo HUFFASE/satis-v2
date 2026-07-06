@@ -26,7 +26,13 @@ const forecastSheetMappingSchema = z.array(
 );
 
 function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
+  if (!(error instanceof Error)) return fallback;
+
+  if (/ECMA-376 Encrypted file|EncryptionInfo|encrypted/i.test(error.message)) {
+    return "Excel dosyası şifreli, korumalı veya bozuk görünüyor. Lütfen dosyayı Excel'de açıp şifresiz/korumasız yeni bir XLSX olarak kaydedin ve tekrar yükleyin.";
+  }
+
+  return error.message;
 }
 
 function calculateGpPercent(revenue: number, gp: number) {
@@ -97,7 +103,7 @@ function parseImportNumber(value: unknown, fieldName: string, sheetName: string,
 
   const parsed = Number(normalized);
 
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  if (!Number.isFinite(parsed)) {
     throw new Error(`${sheetName} sheet'indeki ${cellAddress} hücresinde ${fieldName} değeri geçerli değil: "${text}".`);
   }
 
@@ -721,10 +727,6 @@ export async function importForecastFromXls(formData: FormData, fiscalYear: numb
       const worksheet = workbook.Sheets[sheetName];
       const revenue = parseImportNumber(worksheet?.G10?.v ?? worksheet?.G10?.w, "Revenue", sheetName, "G10");
       const gp = parseImportNumber(worksheet?.G11?.v ?? worksheet?.G11?.w, "GP", sheetName, "G11");
-
-      if (gp > revenue) {
-        return { success: false, error: `${sheetName} sheet'inde GP, Revenue değerinden büyük olamaz.` };
-      }
 
       const existingRow = importRows.get(mappedVendorId);
       importRows.set(mappedVendorId, {

@@ -26,7 +26,13 @@ interface ParsedBacklogImportRow {
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
+  if (!(error instanceof Error)) return fallback;
+
+  if (/ECMA-376 Encrypted file|EncryptionInfo|encrypted/i.test(error.message)) {
+    return "Excel dosyası şifreli, korumalı veya bozuk görünüyor. Lütfen dosyayı Excel'de açıp şifresiz/korumasız yeni bir XLSX olarak kaydedin ve tekrar yükleyin.";
+  }
+
+  return error.message;
 }
 
 function normalizeLookupValue(value: string) {
@@ -101,7 +107,7 @@ function parseImportNumber(value: string, fieldName: string, rowNumber: number) 
 
   const parsed = Number(normalized);
 
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  if (!Number.isFinite(parsed)) {
     throw new Error(`${rowNumber}. satırda ${fieldName} değeri geçerli değil: "${value}".`);
   }
 
