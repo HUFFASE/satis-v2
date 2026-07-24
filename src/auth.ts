@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma";
 import { verifyPassword } from "@/lib/auth-utils";
 import { checkRateLimit, registerFailedAttempt, resetAttempts } from "@/lib/rate-limit";
 import { headers } from "next/headers";
+import { authConfig } from "@/auth.config";
 
 class CustomAuthError extends CredentialsSignin {
   code: string;
@@ -14,12 +15,13 @@ class CustomAuthError extends CredentialsSignin {
 }
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  ...authConfig,
   providers: [
     Credentials({
       name: "Credentials",
       credentials: {
         email: { label: "Email", type: "email" },
-        password: { label: "Şifre", type: "password" }
+        password: { label: "Şifre", type: "password" },
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
@@ -75,28 +77,4 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       },
     }),
   ],
-  session: {
-    strategy: "jwt",
-  },
-  callbacks: {
-    async jwt({ token, user }) {
-      if (user) {
-        token.id = user.id;
-        token.role = (user as any).role;
-        token.name = user.name;
-      }
-      return token;
-    },
-    async session({ session, token }) {
-      if (token) {
-        session.user.id = token.id as string;
-        session.user.role = token.role as any;
-        session.user.name = token.name as string;
-      }
-      return session;
-    },
-  },
-  pages: {
-    signIn: "/login",
-  },
 });

@@ -1,0 +1,2 @@
+ALTER TABLE "Forecast"
+ADD COLUMN "note" TEXT;

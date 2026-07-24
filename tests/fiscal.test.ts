@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { getFiscalContext, getQuarterDateRange, getWeekInQuarter, formatFiscalPeriod } from "../src/lib/fiscal";
+import { getFiscalContext, getQuarterDateRange, formatFiscalPeriod } from "../src/lib/fiscal";
+import { getLatestBacklogSnapshots } from "../src/lib/backlog";
 
 describe("Fiscal Helper Functions", () => {
   describe("getFiscalContext", () => {
@@ -79,5 +80,23 @@ describe("Fiscal Helper Functions", () => {
       expect(formatFiscalPeriod(2026, 1)).toBe("FY2026 - Q1 (Aralık 2025 - Şubat 2026)");
       expect(formatFiscalPeriod(2026, 2)).toBe("FY2026 - Q2 (Mart 2026 - Mayıs 2026)");
     });
+  });
+});
+
+describe("Backlog snapshot selection", () => {
+  it("uses only the most recent eligible weekly backlog for each vendor and period", () => {
+    const latest = getLatestBacklogSnapshots(
+      [
+        { vendorId: "vendor-a", fiscalPeriodId: "q1", weekNumber: 1, backlog: 100 },
+        { vendorId: "vendor-a", fiscalPeriodId: "q1", weekNumber: 3, backlog: 160 },
+        { vendorId: "vendor-a", fiscalPeriodId: "q1", weekNumber: 5, backlog: 230 },
+        { vendorId: "vendor-b", fiscalPeriodId: "q1", weekNumber: 2, backlog: 90 },
+      ],
+      3
+    );
+
+    expect(latest.get("vendor-a:q1")?.backlog).toBe(160);
+    expect(latest.get("vendor-b:q1")?.backlog).toBe(90);
+    expect(latest.size).toBe(2);
   });
 });

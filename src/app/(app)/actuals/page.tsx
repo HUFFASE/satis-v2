@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,7 +45,10 @@ import {
   Users2,
   FileSpreadsheet,
   Upload,
+  Filter,
+  X,
 } from "lucide-react";
+import { MultiSelectFilter, FilterOption } from "@/components/ui/multi-select-filter";
 import { getActuals, upsertActual, getSessionUser, importBacklogFromXls } from "./actions";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 
@@ -101,6 +105,12 @@ export default function ActualsPage() {
   const [bulkFile, setBulkFile] = useState<File | null>(null);
   const [bulkFileName, setBulkFileName] = useState<string>("");
   const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
+  const [bulkWeekNumber, setBulkWeekNumber] = useState<number>(defaultWeek);
+
+  const handleOpenBulkModal = () => {
+    setBulkWeekNumber(weekNumber);
+    setIsBulkUploadModalOpen(true);
+  };
 
   // Fetch session details
   useEffect(() => {
@@ -115,14 +125,17 @@ export default function ActualsPage() {
     loadUser();
   }, []);
 
+  const [latestUploadWeekNumber, setLatestUploadWeekNumber] = useState<number | null>(null);
+
   // Fetch actuals list
   const loadActuals = useCallback(async () => {
     setIsLoading(true);
     try {
-      const data = await getActuals(fiscalYear, quarter, weekNumber);
-      setActuals(data);
+      const res = await getActuals(fiscalYear, quarter, weekNumber);
+      setActuals(res.rows);
+      setLatestUploadWeekNumber(res.latestUploadWeekNumber);
     } catch (err: unknown) {
-      toast.error(getErrorMessage(err, "Backlog verileri yüklenirken hata oluştu."));
+      toast.error(getErrorMessage(err, "Actual verileri yüklenirken hata oluştu."));
     } finally {
       setIsLoading(false);
     }
@@ -166,7 +179,7 @@ export default function ActualsPage() {
       );
 
       if (res.success) {
-        toast.success("Revenue/GP değeri başarıyla güncellendi.");
+        toast.success("Actual verisi başarıyla güncellendi.");
         setIsEditModalOpen(false);
         loadActuals();
       } else {
@@ -206,15 +219,77 @@ export default function ActualsPage() {
     return formatPercent(revenue, gp);
   };
 
+  // Multi-select filter states (Satış Müdürü -> Marka)
+  const [selectedManagerIds, setSelectedManagerIds] = useState<string[]>([]);
+  const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
+
+  // Sales Manager options for multi-select filter
+  const managerOptions = useMemo<FilterOption[]>(() => {
+    const map = new Map<string, { label: string; count: number }>();
+    for (const row of actuals) {
+      const id = row.managerId ?? "unassigned";
+      const label = row.managerName ?? "Atanmamış";
+      const existing = map.get(id);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        map.set(id, { label, count: 1 });
+      }
+    }
+    return Array.from(map.entries())
+      .map(([value, { label, count }]) => ({ value, label, count }))
+      .sort((a, b) => a.label.localeCompare(b.label, "tr"));
+  }, [actuals]);
+
+  // Vendor options for multi-select filter (cascaded by selected Sales Managers)
+  const vendorOptions = useMemo<FilterOption[]>(() => {
+    const relevantRows = selectedManagerIds.length > 0
+      ? actuals.filter((row) => selectedManagerIds.includes(row.managerId ?? "unassigned"))
+      : actuals;
+
+    const map = new Map<string, { label: string; count: number }>();
+    for (const row of relevantRows) {
+      map.set(row.vendorId, { label: row.vendorName, count: 1 });
+    }
+    return Array.from(map.entries())
+      .map(([value, { label }]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "tr"));
+  }, [actuals, selectedManagerIds]);
+
+  const handleManagerChange = (newManagerIds: string[]) => {
+    setSelectedManagerIds(newManagerIds);
+    if (newManagerIds.length > 0) {
+      const validVendorIds = actuals
+        .filter((row) => newManagerIds.includes(row.managerId ?? "unassigned"))
+        .map((row) => row.vendorId);
+      setSelectedVendorIds((prev) => prev.filter((id) => validVendorIds.includes(id)));
+    }
+  };
+
+  const clearAllFilters = () => {
+    setSelectedManagerIds([]);
+    setSelectedVendorIds([]);
+  };
+
+  // Filtered actuals array
+  const filteredActuals = useMemo(() => {
+    return actuals.filter((row) => {
+      const managerId = row.managerId ?? "unassigned";
+      const matchesManager = selectedManagerIds.length === 0 || selectedManagerIds.includes(managerId);
+      const matchesVendor = selectedVendorIds.length === 0 || selectedVendorIds.includes(row.vendorId);
+      return matchesManager && matchesVendor;
+    });
+  }, [actuals, selectedManagerIds, selectedVendorIds]);
+
   // Totals calculations
-  const totalRevenue = actuals.reduce((sum, item) => sum + item.backlog, 0);
-  const totalGP = actuals.reduce((sum, item) => sum + item.invoiced, 0);
+  const totalRevenue = filteredActuals.reduce((sum, item) => sum + item.backlog, 0);
+  const totalGP = filteredActuals.reduce((sum, item) => sum + item.invoiced, 0);
   const totalGPPercent = totalRevenue > 0 ? (totalGP / totalRevenue) * 100 : 0;
 
   const managerGroups = useMemo<ManagerActualGroup[]>(() => {
     const groupMap = new Map<string, ManagerActualGroup>();
 
-    for (const row of actuals) {
+    for (const row of filteredActuals) {
       const groupId = row.managerId ?? "unassigned";
       const managerName = row.managerName ?? "Atanmamış";
       const existing = groupMap.get(groupId);
@@ -246,7 +321,7 @@ export default function ActualsPage() {
     return Array.from(groupMap.values()).sort((a, b) =>
       a.managerName.localeCompare(b.managerName, "tr")
     );
-  }, [actuals]);
+  }, [filteredActuals]);
 
   const handleSort = (key: ActualSortKey) => {
     if (sortKey === key) {
@@ -296,14 +371,14 @@ export default function ActualsPage() {
       const formData = new FormData();
       formData.append("file", bulkFile);
 
-      const result = await importBacklogFromXls(formData, fiscalYear, quarter, weekNumber);
+      const result = await importBacklogFromXls(formData, fiscalYear, quarter, bulkWeekNumber);
       if (!result.success) {
         toast.error(result.error || "XLS yükleme sırasında hata oluştu.");
         return;
       }
 
       const skippedDuplicateCount = result.skippedDuplicateCount ?? 0;
-      toast.success(`${result.importedCount} Revenue/GP satırı yüklendi.`);
+      toast.success(`${result.importedCount} Revenue/GP satırı (${bulkWeekNumber}. Hafta) yüklendi.`);
       if (skippedDuplicateCount > 0) {
         toast.info(`${skippedDuplicateCount} tekrar eden satır mevcut vendor toplamına eklendi.`);
       }
@@ -316,7 +391,11 @@ export default function ActualsPage() {
       setIsBulkUploadModalOpen(false);
       setBulkFile(null);
       setBulkFileName("");
-      await loadActuals();
+      if (weekNumber !== bulkWeekNumber) {
+        setWeekNumber(bulkWeekNumber);
+      } else {
+        await loadActuals();
+      }
     } catch (err: unknown) {
       toast.error(getErrorMessage(err, "XLS yükleme sırasında hata oluştu."));
     } finally {
@@ -409,6 +488,16 @@ export default function ActualsPage() {
               </SelectContent>
             </Select>
           </div>
+
+          {latestUploadWeekNumber && (
+            <>
+              <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-700" />
+              <Badge variant="outline" className="border-emerald-700 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 flex items-center gap-1">
+                <Upload className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" />
+                Son Yükleme: Hafta {latestUploadWeekNumber}
+              </Badge>
+            </>
+          )}
         </div>
       </div>
 
@@ -419,6 +508,49 @@ export default function ActualsPage() {
           <span>Bu mali çeyrek kilitlenmiştir. Dönem üzerindeki tüm Revenue/GP verileri salt okunur durumdadır.</span>
         </div>
       )}
+
+      {/* Dynamic Multi-Select Filter Bar (Satış Müdürü -> Marka) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 flex items-center gap-1.5 mr-1">
+            <Filter className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" /> Filtreler:
+          </span>
+
+          <MultiSelectFilter
+            title="Satış Müdürü"
+            options={managerOptions}
+            selectedValues={selectedManagerIds}
+            onChange={handleManagerChange}
+            placeholder="Satış Müdürü ara..."
+            icon={<Users2 className="h-3.5 w-3.5 text-slate-500" />}
+          />
+
+          <MultiSelectFilter
+            title="Marka"
+            options={vendorOptions}
+            selectedValues={selectedVendorIds}
+            onChange={setSelectedVendorIds}
+            placeholder="Marka ara..."
+            icon={<FileSpreadsheet className="h-3.5 w-3.5 text-slate-500" />}
+          />
+
+          {(selectedManagerIds.length > 0 || selectedVendorIds.length > 0) && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={clearAllFilters}
+              className="h-9 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+            >
+              <X className="mr-1 h-3.5 w-3.5" /> Filtreleri Temizle
+            </Button>
+          )}
+        </div>
+
+        <div className="text-xs text-slate-500 font-medium">
+          Gösterilen: <span className="font-bold text-slate-900 dark:text-slate-100">{filteredActuals.length}</span> / {actuals.length} marka
+        </div>
+      </div>
 
       {/* Summary totals */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -545,7 +677,16 @@ export default function ActualsPage() {
                             {formatPercent(row.backlog, row.invoiced)}
                           </TableCell>
                           <TableCell className="text-center text-slate-500 font-sans text-[11px]">
-                            {formatUpdatedAt(row.updatedAt)}
+                            {row.updatedAt ? (
+                              <div className="flex items-center justify-center gap-1.5">
+                                <Badge variant="outline" className="text-[10px] py-0 px-1 font-semibold bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
+                                  Hafta {weekNumber}
+                                </Badge>
+                                <span>{formatUpdatedAt(row.updatedAt)}</span>
+                              </div>
+                            ) : (
+                              "Girilmemiş"
+                            )}
                           </TableCell>
                           <TableCell className="text-right">
                             <Button
@@ -596,7 +737,7 @@ export default function ActualsPage() {
       <div className="flex justify-end">
         <Button
           type="button"
-          onClick={() => setIsBulkUploadModalOpen(true)}
+          onClick={handleOpenBulkModal}
           className="h-9 bg-[#2E5A43] px-4 text-white hover:bg-[#1F3A2E]"
         >
           <Upload className="h-4 w-4" />
@@ -612,9 +753,39 @@ export default function ActualsPage() {
               XLS Bulk Yükleme
             </DialogTitle>
             <DialogDescription className="text-slate-500 font-sans text-xs">
-              FY{fiscalYear} - Q{quarter} - Hafta {weekNumber} Revenue/GP verileri için XLS veya XLSX dosyası seçin.
+              FY{fiscalYear} - Q{quarter} dönemi için seçilen haftaya Revenue/GP verilerini yükleyin.
             </DialogDescription>
           </DialogHeader>
+
+          {/* Week Selection for Bulk Upload */}
+          <div className="space-y-1.5 rounded-lg border border-emerald-200/60 bg-emerald-50/50 p-3.5 dark:border-emerald-900/40 dark:bg-emerald-950/20">
+            <Label htmlFor="bulk-week-select" className="text-xs font-semibold text-slate-700 dark:text-slate-300 font-sans">
+              Yüklenecek Hafta Seçimi:
+            </Label>
+            <div className="flex items-center gap-2">
+              <Select
+                value={bulkWeekNumber.toString()}
+                onValueChange={(val) => { if (val) setBulkWeekNumber(parseInt(val)); }}
+              >
+                <SelectTrigger id="bulk-week-select" className="h-9 border-slate-200 bg-white text-xs font-semibold focus:outline-none dark:border-slate-800 dark:bg-slate-900">
+                  <SelectValue placeholder="Hafta Seçin" />
+                </SelectTrigger>
+                <SelectContent className="bg-white border-slate-200">
+                  {Array.from({ length: 13 }, (_, i) => i + 1).map((w) => (
+                    <SelectItem key={w} value={w.toString()} className="text-xs font-sans">
+                      Hafta {w}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Badge className="bg-[#1F3A2E] text-white shrink-0 px-2.5 py-1 text-xs">
+                FY{fiscalYear} Q{quarter} - {bulkWeekNumber}. Hafta
+              </Badge>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Yüklediğiniz Excel satırları <strong>{bulkWeekNumber}. Hafta</strong> verisi olarak kaydedilecektir.
+            </p>
+          </div>
 
           <div
             className="rounded-lg border-2 border-dashed border-slate-200 bg-slate-50/70 p-8 text-center dark:border-slate-800 dark:bg-slate-950/30"

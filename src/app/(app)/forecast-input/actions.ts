@@ -13,6 +13,7 @@ import * as XLSX from "xlsx";
 const submitForecastSchema = z.object({
   revenue: z.number().min(0, "Revenue değeri sıfırdan küçük olamaz."),
   gp: z.number().min(0, "GP değeri sıfırdan küçük olamaz."),
+  note: z.string().optional(),
 });
 
 const MAX_IMPORT_FILE_SIZE = 5 * 1024 * 1024;
@@ -191,6 +192,7 @@ async function writeActiveForecast(
     weekNumber: number;
     revenue: number;
     gp: number;
+    note?: string | null;
     submittedById: string;
   }
 ) {
@@ -227,6 +229,7 @@ async function writeActiveForecast(
         data: {
           revenue: input.revenue,
           gp: input.gp,
+          note: input.note !== undefined ? input.note : existingWeekForecast.note,
           submittedById: input.submittedById,
           isActive: true,
         },
@@ -238,6 +241,7 @@ async function writeActiveForecast(
           weekNumber: input.weekNumber,
           revenue: input.revenue,
           gp: input.gp,
+          note: input.note ?? null,
           submittedById: input.submittedById,
           isActive: true,
         },
@@ -250,7 +254,7 @@ async function writeActiveForecast(
   };
 }
 
-export async function getActiveForecasts(fiscalYear: number, quarter: number) {
+export async function getActiveForecasts(fiscalYear: number, quarter: number, selectedWeekNumber?: number) {
   const session = await auth();
   if (!session?.user) {
     throw new Error("Oturum açık değil.");
@@ -258,7 +262,11 @@ export async function getActiveForecasts(fiscalYear: number, quarter: number) {
 
   const currentContext = getFiscalContext(new Date());
   const isCurrentFiscalPeriod = currentContext.fiscalYear === fiscalYear && currentContext.quarter === quarter;
-  const activeBacklogWeekNumber = currentContext.weekInQuarter;
+  const targetWeek = selectedWeekNumber && selectedWeekNumber >= 1 && selectedWeekNumber <= 13
+    ? selectedWeekNumber
+    : (isCurrentFiscalPeriod ? currentContext.weekInQuarter : undefined);
+
+  const activeBacklogWeekNumber = targetWeek ?? currentContext.weekInQuarter;
   const accessibleVendorIds = await getAccessibleVendorIds(session.user);
   const period = await ensureFiscalPeriod(fiscalYear, quarter);
 
@@ -284,7 +292,7 @@ export async function getActiveForecasts(fiscalYear: number, quarter: number) {
     where: {
       vendorId: { in: accessibleVendorIds },
       fiscalPeriodId: period.id,
-      ...(isCurrentFiscalPeriod ? { weekNumber: currentContext.weekInQuarter } : { isActive: true }),
+      ...(targetWeek ? { weekNumber: targetWeek } : { isActive: true }),
     },
   });
   const forecastMap = new Map(forecasts.map((forecast) => [forecast.vendorId, forecast]));
@@ -307,7 +315,16 @@ export async function getActiveForecasts(fiscalYear: number, quarter: number) {
   const targetMap = new Map(targets.map((target) => [target.vendorId, target]));
   const actualMap = new Map(actuals.map((actual) => [actual.vendorId, actual]));
 
-  return vendors.map((vendor) => {
+  const latestForecast = await prisma.forecast.findFirst({
+    where: {
+      vendorId: { in: accessibleVendorIds },
+      fiscalPeriodId: period.id,
+    },
+    orderBy: { updatedAt: "desc" },
+    select: { weekNumber: true, updatedAt: true },
+  });
+
+  const rows = vendors.map((vendor) => {
     const forecast = forecastMap.get(vendor.id);
     const target = targetMap.get(vendor.id);
     const actual = actualMap.get(vendor.id);
@@ -330,8 +347,9 @@ export async function getActiveForecasts(fiscalYear: number, quarter: number) {
       gpPercent: calculateGpPercent(forecastRevenue, forecastGp),
       revenueAchievement: targetRevenue > 0 ? (forecastRevenue / targetRevenue) * 100 : 0,
       gpAchievement: targetGp > 0 ? (forecastGp / targetGp) * 100 : 0,
-      weekNumber: forecast?.weekNumber ?? null,
+      weekNumber: forecast?.weekNumber ?? targetWeek ?? null,
       submittedAt: forecast?.updatedAt ?? null,
+      note: forecast?.note ?? null,
       hasForecast: Boolean(forecast),
       hasTarget: Boolean(target),
       backlogRevenue,
@@ -341,6 +359,12 @@ export async function getActiveForecasts(fiscalYear: number, quarter: number) {
       isPeriodLocked: period.isLocked,
     };
   });
+
+  return {
+    rows,
+    latestUploadWeekNumber: latestForecast?.weekNumber ?? null,
+    latestUploadAt: latestForecast?.updatedAt ?? null,
+  };
 }
 
 export async function getForecastVersions(vendorId: string, fiscalYear: number, quarter: number) {
@@ -400,7 +424,9 @@ export async function submitForecast(
   fiscalYear: number,
   quarter: number,
   revenueInput: number,
-  gpInput: number
+  gpInput: number,
+  targetWeekNumber?: number,
+  noteInput?: string
 ) {
   const session = await auth();
   if (!session?.user) {
@@ -413,17 +439,21 @@ export async function submitForecast(
     return { success: false, error: getErrorMessage(err, "Vendor yetkisi doğrulanamadı.") };
   }
 
-  const validation = submitForecastSchema.safeParse({ revenue: revenueInput, gp: gpInput });
+  const validation = submitForecastSchema.safeParse({ revenue: revenueInput, gp: gpInput, note: noteInput });
   if (!validation.success) {
     return { success: false, error: validation.error.issues[0].message };
   }
 
-  const { revenue, gp } = validation.data;
+  const { revenue, gp, note } = validation.data;
   let weekNumber: number;
-  try {
-    weekNumber = assertCurrentFiscalPeriod(fiscalYear, quarter);
-  } catch (err: unknown) {
-    return { success: false, error: getErrorMessage(err, "Seçilen dönem aktif forecast döneminde değil.") };
+  if (targetWeekNumber && targetWeekNumber >= 1 && targetWeekNumber <= 13) {
+    weekNumber = targetWeekNumber;
+  } else {
+    try {
+      weekNumber = assertCurrentFiscalPeriod(fiscalYear, quarter);
+    } catch (err: unknown) {
+      return { success: false, error: getErrorMessage(err, "Seçilen dönem aktif forecast döneminde değil.") };
+    }
   }
 
   try {
@@ -442,6 +472,7 @@ export async function submitForecast(
           weekNumber,
           revenue,
           gp,
+          note,
           submittedById: session.user.id,
         });
 
@@ -643,7 +674,12 @@ export async function inspectForecastWorkbook(formData: FormData) {
   }
 }
 
-export async function importForecastFromXls(formData: FormData, fiscalYear: number, quarter: number) {
+export async function importForecastFromXls(
+  formData: FormData,
+  fiscalYear: number,
+  quarter: number,
+  targetWeekNumber?: number
+) {
   const session = await auth();
   if (!session?.user) {
     return { success: false, error: "Oturum açık değil." };
@@ -669,10 +705,14 @@ export async function importForecastFromXls(formData: FormData, fiscalYear: numb
   }
 
   let weekNumber: number;
-  try {
-    weekNumber = assertCurrentFiscalPeriod(fiscalYear, quarter);
-  } catch (err: unknown) {
-    return { success: false, error: getErrorMessage(err, "Seçilen dönem aktif forecast döneminde değil.") };
+  if (targetWeekNumber && targetWeekNumber >= 1 && targetWeekNumber <= 13) {
+    weekNumber = targetWeekNumber;
+  } else {
+    try {
+      weekNumber = assertCurrentFiscalPeriod(fiscalYear, quarter);
+    } catch (err: unknown) {
+      return { success: false, error: getErrorMessage(err, "Seçilen dönem aktif forecast döneminde değil.") };
+    }
   }
 
   try {
@@ -838,4 +878,47 @@ export async function getSessionUser() {
     name: session.user.name,
     role: session.user.role,
   };
+}
+
+export async function getWeeklyForecastTrend(fiscalYear: number, quarter: number) {
+  const session = await auth();
+  if (!session?.user) {
+    throw new Error("Oturum açık değil.");
+  }
+
+  const accessibleVendorIds = await getAccessibleVendorIds(session.user);
+  const period = await ensureFiscalPeriod(fiscalYear, quarter);
+
+  const forecasts = await prisma.forecast.findMany({
+    where: {
+      fiscalPeriodId: period.id,
+      vendorId: { in: accessibleVendorIds },
+    },
+    select: {
+      weekNumber: true,
+      revenue: true,
+      gp: true,
+    },
+  });
+
+  const weeklyMap = new Map<number, { revenue: number; gp: number; count: number }>();
+  for (let w = 1; w <= 13; w++) {
+    weeklyMap.set(w, { revenue: 0, gp: 0, count: 0 });
+  }
+
+  for (const f of forecasts) {
+    const existing = weeklyMap.get(f.weekNumber);
+    if (existing) {
+      existing.revenue += Number(f.revenue);
+      existing.gp += Number(f.gp);
+      existing.count += 1;
+    }
+  }
+
+  return Array.from(weeklyMap.entries()).map(([weekNumber, data]) => ({
+    weekNumber,
+    revenue: data.revenue,
+    gp: data.gp,
+    count: data.count,
+  }));
 }

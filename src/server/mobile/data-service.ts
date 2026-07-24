@@ -4,6 +4,7 @@ import { ensureFiscalPeriod } from "@/lib/fiscal-db";
 import { getFiscalContext, getQuarterDateRange } from "@/lib/fiscal";
 import { assertVendorAccess, getAccessibleVendorIds } from "@/lib/scope";
 import { writeAuditLog } from "@/lib/audit";
+import { getLatestBacklogSnapshots } from "@/lib/backlog";
 import type { MobileSessionUser } from "./auth";
 
 type MobileMetrics = ReturnType<typeof emptyMetrics>;
@@ -231,7 +232,8 @@ export async function getMobileDashboard(user: MobileSessionUser, fiscalYear?: n
     addMetrics(group.metrics, part);
   }
 
-  for (const actual of actuals) {
+  const latestActuals = getLatestBacklogSnapshots(actuals);
+  for (const actual of latestActuals.values()) {
     const period = periodById.get(actual.fiscalPeriodId);
     if (!period) continue;
     const part = { backlogRevenue: Number(actual.backlog), backlogGp: Number(actual.invoiced) };

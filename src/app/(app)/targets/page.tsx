@@ -45,7 +45,10 @@ import {
   FileSpreadsheet,
   Upload,
   Download,
+  Filter,
+  X,
 } from "lucide-react";
+import { MultiSelectFilter, FilterOption } from "@/components/ui/multi-select-filter";
 import { getTargets, upsertTarget, getSessionUser, importTargetsFromXls } from "./actions";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 
@@ -216,15 +219,77 @@ export default function TargetsPage() {
     return `${((gpVal / rev) * 100).toFixed(1)}%`;
   };
 
+  // Multi-select filter states (Satış Müdürü -> Marka)
+  const [selectedManagerIds, setSelectedManagerIds] = useState<string[]>([]);
+  const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
+
+  // Sales Manager options for multi-select filter
+  const managerOptions = useMemo<FilterOption[]>(() => {
+    const map = new Map<string, { label: string; count: number }>();
+    for (const row of targets) {
+      const id = row.managerId ?? "unassigned";
+      const label = row.managerName ?? "Atanmamış";
+      const existing = map.get(id);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        map.set(id, { label, count: 1 });
+      }
+    }
+    return Array.from(map.entries())
+      .map(([value, { label, count }]) => ({ value, label, count }))
+      .sort((a, b) => a.label.localeCompare(b.label, "tr"));
+  }, [targets]);
+
+  // Vendor options for multi-select filter (cascaded by selected Sales Managers)
+  const vendorOptions = useMemo<FilterOption[]>(() => {
+    const relevantRows = selectedManagerIds.length > 0
+      ? targets.filter((row) => selectedManagerIds.includes(row.managerId ?? "unassigned"))
+      : targets;
+
+    const map = new Map<string, { label: string; count: number }>();
+    for (const row of relevantRows) {
+      map.set(row.vendorId, { label: row.vendorName, count: 1 });
+    }
+    return Array.from(map.entries())
+      .map(([value, { label }]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "tr"));
+  }, [targets, selectedManagerIds]);
+
+  const handleManagerChange = (newManagerIds: string[]) => {
+    setSelectedManagerIds(newManagerIds);
+    if (newManagerIds.length > 0) {
+      const validVendorIds = targets
+        .filter((row) => newManagerIds.includes(row.managerId ?? "unassigned"))
+        .map((row) => row.vendorId);
+      setSelectedVendorIds((prev) => prev.filter((id) => validVendorIds.includes(id)));
+    }
+  };
+
+  const clearAllFilters = () => {
+    setSelectedManagerIds([]);
+    setSelectedVendorIds([]);
+  };
+
+  // Filtered targets array
+  const filteredTargets = useMemo(() => {
+    return targets.filter((row) => {
+      const managerId = row.managerId ?? "unassigned";
+      const matchesManager = selectedManagerIds.length === 0 || selectedManagerIds.includes(managerId);
+      const matchesVendor = selectedVendorIds.length === 0 || selectedVendorIds.includes(row.vendorId);
+      return matchesManager && matchesVendor;
+    });
+  }, [targets, selectedManagerIds, selectedVendorIds]);
+
   // Totals calculations
-  const totalRevenue = targets.reduce((sum, item) => sum + item.revenue, 0);
-  const totalGP = targets.reduce((sum, item) => sum + item.gp, 0);
+  const totalRevenue = filteredTargets.reduce((sum, item) => sum + item.revenue, 0);
+  const totalGP = filteredTargets.reduce((sum, item) => sum + item.gp, 0);
   const totalGPPercent = totalRevenue > 0 ? (totalGP / totalRevenue) * 100 : 0;
 
   const managerGroups = useMemo<ManagerTargetGroup[]>(() => {
     const groupMap = new Map<string, ManagerTargetGroup>();
 
-    for (const row of targets) {
+    for (const row of filteredTargets) {
       const groupId = row.managerId ?? "unassigned";
       const managerName = row.managerName ?? "Atanmamış";
       const existing = groupMap.get(groupId);
@@ -256,7 +321,7 @@ export default function TargetsPage() {
     return Array.from(groupMap.values()).sort((a, b) =>
       a.managerName.localeCompare(b.managerName, "tr")
     );
-  }, [targets]);
+  }, [filteredTargets]);
 
   const handleSort = (key: TargetSortKey) => {
     if (sortKey === key) {
@@ -442,6 +507,49 @@ export default function TargetsPage() {
           <span>Bu mali çeyrek kilitlenmiştir. Dönem üzerindeki tüm hedefler salt okunur durumdadır.</span>
         </div>
       )}
+
+      {/* Dynamic Multi-Select Filter Bar (Satış Müdürü -> Marka) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 flex items-center gap-1.5 mr-1">
+            <Filter className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" /> Filtreler:
+          </span>
+
+          <MultiSelectFilter
+            title="Satış Müdürü"
+            options={managerOptions}
+            selectedValues={selectedManagerIds}
+            onChange={handleManagerChange}
+            placeholder="Satış Müdürü ara..."
+            icon={<Users2 className="h-3.5 w-3.5 text-slate-500" />}
+          />
+
+          <MultiSelectFilter
+            title="Marka"
+            options={vendorOptions}
+            selectedValues={selectedVendorIds}
+            onChange={setSelectedVendorIds}
+            placeholder="Marka ara..."
+            icon={<FileSpreadsheet className="h-3.5 w-3.5 text-slate-500" />}
+          />
+
+          {(selectedManagerIds.length > 0 || selectedVendorIds.length > 0) && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={clearAllFilters}
+              className="h-9 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+            >
+              <X className="mr-1 h-3.5 w-3.5" /> Filtreleri Temizle
+            </Button>
+          )}
+        </div>
+
+        <div className="text-xs text-slate-500 font-medium">
+          Gösterilen: <span className="font-bold text-slate-900 dark:text-slate-100">{filteredTargets.length}</span> / {targets.length} marka
+        </div>
+      </div>
 
       {/* Totals Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

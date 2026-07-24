@@ -219,10 +219,28 @@ export async function getActuals(fiscalYear: number, quarter: number, weekNumber
       weekNumber,
     },
   });
-
   const actualMap = new Map(actuals.map((a) => [a.vendorId, a]));
 
-  return vendors.map((b) => {
+  const [latestActual, maxWeekActual] = await Promise.all([
+    prisma.actual.findFirst({
+      where: {
+        fiscalPeriodId: period.id,
+        vendorId: { in: accessibleVendorIds },
+      },
+      orderBy: { updatedAt: "desc" },
+      select: { weekNumber: true, updatedAt: true },
+    }),
+    prisma.actual.findFirst({
+      where: {
+        fiscalPeriodId: period.id,
+        vendorId: { in: accessibleVendorIds },
+      },
+      orderBy: { weekNumber: "desc" },
+      select: { weekNumber: true },
+    }),
+  ]);
+
+  const rows = vendors.map((b) => {
     const actual = actualMap.get(b.id);
     return {
       vendorId: b.id,
@@ -233,8 +251,16 @@ export async function getActuals(fiscalYear: number, quarter: number, weekNumber
       invoiced: actual ? Number(actual.invoiced) : 0,
       updatedAt: actual ? actual.updatedAt : null,
       isPeriodLocked: period.isLocked,
+      hasData: Boolean(actual),
+      weekNumber: weekNumber,
     };
   });
+
+  return {
+    rows,
+    latestUploadWeekNumber: latestActual?.weekNumber ?? maxWeekActual?.weekNumber ?? null,
+    latestUploadAt: latestActual?.updatedAt ?? null,
+  };
 }
 
 /**

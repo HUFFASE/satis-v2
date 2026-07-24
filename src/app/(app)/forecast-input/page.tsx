@@ -47,13 +47,20 @@ import {
   TrendingUp,
   Upload,
   Users2,
+  Filter,
+  X,
+  MessageSquare,
+  StickyNote,
+  BarChart3,
 } from "lucide-react";
+import { MultiSelectFilter, FilterOption } from "@/components/ui/multi-select-filter";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 import {
   copyPreviousWeekForecastsForManager,
   getActiveForecasts,
   getForecastVersions,
   getSessionUser,
+  getWeeklyForecastTrend,
   importForecastFromXls,
   inspectForecastWorkbook,
   submitForecast,
@@ -74,6 +81,7 @@ interface ForecastRow {
   gpAchievement: number;
   weekNumber: number | null;
   submittedAt: Date | string | null;
+  note: string | null;
   hasForecast: boolean;
   hasTarget: boolean;
   backlogRevenue: number;
@@ -178,6 +186,9 @@ export default function ForecastInputPage() {
   const [selectedForecast, setSelectedForecast] = useState<ForecastRow | null>(null);
   const [revenueInput, setRevenueInput] = useState("0");
   const [gpInput, setGpInput] = useState("0");
+  const [noteInput, setNoteInput] = useState("");
+  const [viewWeekNumber, setViewWeekNumber] = useState<number | "active">("active");
+  const [weeklyTrend, setWeeklyTrend] = useState<{ weekNumber: number; revenue: number; gp: number; count: number }[]>([]);
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isBulkUploadModalOpen, setIsBulkUploadModalOpen] = useState(false);
@@ -187,6 +198,12 @@ export default function ForecastInputPage() {
   const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
   const [bulkInspectResult, setBulkInspectResult] = useState<ForecastImportInspectResult | null>(null);
   const [sheetMappings, setSheetMappings] = useState<Record<string, string>>({});
+  const [bulkWeekNumber, setBulkWeekNumber] = useState<number>(currentContext.weekInQuarter);
+
+  const handleOpenBulkModal = () => {
+    setBulkWeekNumber(currentContext.weekInQuarter);
+    setIsBulkUploadModalOpen(true);
+  };
   const [copyingManagerId, setCopyingManagerId] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<ForecastSortKey>("managerName");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
@@ -195,6 +212,68 @@ export default function ForecastInputPage() {
   const [versions, setVersions] = useState<ForecastVersion[]>([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+
+  // Multi-select filter states (Satış Müdürü -> Marka)
+  const [selectedManagerIds, setSelectedManagerIds] = useState<string[]>([]);
+  const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
+
+  // Sales Manager options for multi-select filter
+  const managerOptions = useMemo<FilterOption[]>(() => {
+    const map = new Map<string, { label: string; count: number }>();
+    for (const row of forecasts) {
+      const id = row.managerId ?? "unassigned";
+      const label = row.managerName ?? "Atanmamış";
+      const existing = map.get(id);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        map.set(id, { label, count: 1 });
+      }
+    }
+    return Array.from(map.entries())
+      .map(([value, { label, count }]) => ({ value, label, count }))
+      .sort((a, b) => a.label.localeCompare(b.label, "tr"));
+  }, [forecasts]);
+
+  // Vendor options for multi-select filter (cascaded by selected Sales Managers)
+  const vendorOptions = useMemo<FilterOption[]>(() => {
+    const relevantRows = selectedManagerIds.length > 0
+      ? forecasts.filter((row) => selectedManagerIds.includes(row.managerId ?? "unassigned"))
+      : forecasts;
+
+    const map = new Map<string, { label: string; count: number }>();
+    for (const row of relevantRows) {
+      map.set(row.vendorId, { label: row.vendorName, count: 1 });
+    }
+    return Array.from(map.entries())
+      .map(([value, { label }]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "tr"));
+  }, [forecasts, selectedManagerIds]);
+
+  const handleManagerChange = (newManagerIds: string[]) => {
+    setSelectedManagerIds(newManagerIds);
+    if (newManagerIds.length > 0) {
+      const validVendorIds = forecasts
+        .filter((row) => newManagerIds.includes(row.managerId ?? "unassigned"))
+        .map((row) => row.vendorId);
+      setSelectedVendorIds((prev) => prev.filter((id) => validVendorIds.includes(id)));
+    }
+  };
+
+  const clearAllFilters = () => {
+    setSelectedManagerIds([]);
+    setSelectedVendorIds([]);
+  };
+
+  // Filtered forecasts array
+  const filteredForecasts = useMemo(() => {
+    return forecasts.filter((row) => {
+      const managerId = row.managerId ?? "unassigned";
+      const matchesManager = selectedManagerIds.length === 0 || selectedManagerIds.includes(managerId);
+      const matchesVendor = selectedVendorIds.length === 0 || selectedVendorIds.includes(row.vendorId);
+      return matchesManager && matchesVendor;
+    });
+  }, [forecasts, selectedManagerIds, selectedVendorIds]);
 
   const isSelectedCurrentPeriod =
     fiscalYear === currentContext.fiscalYear && quarter === currentContext.quarter;
@@ -206,17 +285,25 @@ export default function ForecastInputPage() {
     currentContext.fiscalYear + 1,
   ];
 
+  const [latestUploadWeekNumber, setLatestUploadWeekNumber] = useState<number | null>(null);
+
   const loadForecasts = useCallback(async () => {
     setIsLoading(true);
     try {
-      const data = await getActiveForecasts(fiscalYear, quarter);
-      setForecasts(data);
+      const selectedWeekParam = viewWeekNumber === "active" ? undefined : viewWeekNumber;
+      const [res, trendData] = await Promise.all([
+        getActiveForecasts(fiscalYear, quarter, selectedWeekParam),
+        getWeeklyForecastTrend(fiscalYear, quarter),
+      ]);
+      setForecasts(res.rows);
+      setLatestUploadWeekNumber(res.latestUploadWeekNumber);
+      setWeeklyTrend(trendData);
     } catch (err: unknown) {
       toast.error(getErrorMessage(err, "Forecast verileri yüklenirken hata oluştu."));
     } finally {
       setIsLoading(false);
     }
-  }, [fiscalYear, quarter]);
+  }, [fiscalYear, quarter, viewWeekNumber]);
 
   useEffect(() => {
     void Promise.resolve().then(async () => {
@@ -233,15 +320,15 @@ export default function ForecastInputPage() {
     void Promise.resolve().then(loadForecasts);
   }, [loadForecasts]);
 
-  const totalTargetRevenue = forecasts.reduce((sum, row) => sum + row.targetRevenue, 0);
-  const totalTargetGP = forecasts.reduce((sum, row) => sum + row.targetGp, 0);
-  const totalRevenue = forecasts.reduce((sum, row) => sum + row.revenue, 0);
-  const totalGP = forecasts.reduce((sum, row) => sum + row.gp, 0);
+  const totalTargetRevenue = filteredForecasts.reduce((sum, row) => sum + row.targetRevenue, 0);
+  const totalTargetGP = filteredForecasts.reduce((sum, row) => sum + row.targetGp, 0);
+  const totalRevenue = filteredForecasts.reduce((sum, row) => sum + row.revenue, 0);
+  const totalGP = filteredForecasts.reduce((sum, row) => sum + row.gp, 0);
   const totalGPPercent = totalRevenue > 0 ? (totalGP / totalRevenue) * 100 : 0;
   const totalTargetGPPercent = totalTargetRevenue > 0 ? (totalTargetGP / totalTargetRevenue) * 100 : 0;
   const totalRevenueAchievement = totalTargetRevenue > 0 ? (totalRevenue / totalTargetRevenue) * 100 : 0;
   const totalGPAchievement = totalTargetGP > 0 ? (totalGP / totalTargetGP) * 100 : 0;
-  const forecastedCount = forecasts.filter((row) => row.hasForecast).length;
+  const forecastedCount = filteredForecasts.filter((row) => row.hasForecast).length;
 
   const activeWeekLabel = isSelectedCurrentPeriod
     ? `${currentContext.weekInQuarter}. Hafta`
@@ -256,7 +343,7 @@ export default function ForecastInputPage() {
   const managerGroups = useMemo<ManagerForecastGroup[]>(() => {
     const groupMap = new Map<string, ManagerForecastGroup>();
 
-    for (const row of forecasts) {
+    for (const row of filteredForecasts) {
       const groupId = row.managerId ?? "unassigned";
       const managerName = row.managerName ?? "Atanmamış";
       const existing = groupMap.get(groupId);
@@ -301,7 +388,7 @@ export default function ForecastInputPage() {
         rows: [...group.rows].sort((a, b) => a.vendorName.localeCompare(b.vendorName, "tr")),
       }))
       .sort((a, b) => a.managerName.localeCompare(b.managerName, "tr"));
-  }, [forecasts]);
+  }, [filteredForecasts]);
 
   const handleSort = (key: ForecastSortKey) => {
     if (sortKey === key) {
@@ -405,9 +492,9 @@ export default function ForecastInputPage() {
   };
 
   const handleBulkImportSubmit = async () => {
-    if (!bulkFile) return;
+    if (!bulkFile || !bulkInspectResult) return;
 
-    const unmatchedSheets = bulkInspectResult?.unmatchedSheets ?? [];
+    const unmatchedSheets = bulkInspectResult.unmatchedSheets;
     const missingMappings = unmatchedSheets.filter((sheetName) => !sheetMappings[sheetName]);
 
     if (missingMappings.length > 0) {
@@ -429,7 +516,7 @@ export default function ForecastInputPage() {
         )
       );
 
-      const result = await importForecastFromXls(formData, fiscalYear, quarter);
+      const result = await importForecastFromXls(formData, fiscalYear, quarter, bulkWeekNumber);
       if (!result.success) {
         toast.error(result.error || "Forecast XLS yükleme sırasında hata oluştu.");
         return;
@@ -459,6 +546,7 @@ export default function ForecastInputPage() {
     setSelectedForecast(row);
     setRevenueInput(row.revenue.toString());
     setGpInput(row.gp.toString());
+    setNoteInput(row.note ?? "");
     setIsSubmitModalOpen(true);
   };
 
@@ -476,7 +564,16 @@ export default function ForecastInputPage() {
 
     setIsSubmitting(true);
     try {
-      const result = await submitForecast(selectedForecast.vendorId, fiscalYear, quarter, revenue, gp);
+      const targetWeek = viewWeekNumber === "active" ? undefined : viewWeekNumber;
+      const result = await submitForecast(
+        selectedForecast.vendorId,
+        fiscalYear,
+        quarter,
+        revenue,
+        gp,
+        targetWeek,
+        noteInput
+      );
       if (!result.success) {
         toast.error(result.error || "Forecast kaydedilemedi.");
         return;
@@ -585,9 +682,42 @@ export default function ForecastInputPage() {
             </Select>
           </div>
 
+          <div className="flex items-center gap-2 border-l border-slate-200 pl-3 dark:border-slate-800">
+            <span className="text-xs font-semibold text-slate-500">Görüntülenen Hafta:</span>
+            <Select
+              value={viewWeekNumber.toString()}
+              onValueChange={(val) => {
+                if (!val) return;
+                if (val === "active") setViewWeekNumber("active");
+                else setViewWeekNumber(parseInt(val));
+              }}
+            >
+              <SelectTrigger className="h-8 w-44 border-slate-200 bg-white text-xs font-semibold focus:outline-none dark:border-slate-800 dark:bg-slate-900">
+                <SelectValue placeholder="Aktif Hafta" />
+              </SelectTrigger>
+              <SelectContent className="bg-white border-slate-200 max-h-64">
+                <SelectItem value="active" className="text-xs font-semibold text-emerald-800 dark:text-emerald-400">
+                  Aktif Hafta ({currentContext.weekInQuarter}. Hafta)
+                </SelectItem>
+                {Array.from({ length: 13 }, (_, i) => i + 1).map((w) => (
+                  <SelectItem key={w} value={w.toString()} className="text-xs font-sans">
+                    {w}. Hafta Kayıtları
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
           <Badge className="bg-emerald-800 text-emerald-50 hover:bg-emerald-800">
             Aktif Hafta: {activeWeekLabel}
           </Badge>
+
+          {latestUploadWeekNumber && (
+            <Badge variant="outline" className="border-emerald-700 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 flex items-center gap-1">
+              <Upload className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" />
+              Son Yükleme: Hafta {latestUploadWeekNumber}
+            </Badge>
+          )}
         </div>
       </div>
 
@@ -603,6 +733,49 @@ export default function ForecastInputPage() {
           Seçilen çeyrek kilitli olduğu için forecast girişi kapalıdır.
         </div>
       )}
+
+      {/* Dynamic Multi-Select Filter Bar (Satış Müdürü -> Marka) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 flex items-center gap-1.5 mr-1">
+            <Filter className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" /> Filtreler:
+          </span>
+
+          <MultiSelectFilter
+            title="Satış Müdürü"
+            options={managerOptions}
+            selectedValues={selectedManagerIds}
+            onChange={handleManagerChange}
+            placeholder="Satış Müdürü ara..."
+            icon={<Users2 className="h-3.5 w-3.5 text-slate-500" />}
+          />
+
+          <MultiSelectFilter
+            title="Marka"
+            options={vendorOptions}
+            selectedValues={selectedVendorIds}
+            onChange={setSelectedVendorIds}
+            placeholder="Marka ara..."
+            icon={<FileSpreadsheet className="h-3.5 w-3.5 text-slate-500" />}
+          />
+
+          {(selectedManagerIds.length > 0 || selectedVendorIds.length > 0) && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={clearAllFilters}
+              className="h-9 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+            >
+              <X className="mr-1 h-3.5 w-3.5" /> Filtreleri Temizle
+            </Button>
+          )}
+        </div>
+
+        <div className="text-xs text-slate-500 font-medium">
+          Gösterilen: <span className="font-bold text-slate-900 dark:text-slate-100">{filteredForecasts.length}</span> / {forecasts.length} marka
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -770,7 +943,38 @@ export default function ForecastInputPage() {
                           }
                         >
                           <TableCell className={`pl-14 font-semibold ${row.isBelowBacklog ? "text-red-900 dark:text-red-200" : "text-slate-900 dark:text-slate-100"}`}>
-                            {row.vendorName}
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span>{row.vendorName}</span>
+                              {row.hasForecast && row.weekNumber ? (
+                                <Badge variant="outline" className="text-[10px] py-0 px-1.5 font-semibold bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
+                                  Hafta {row.weekNumber} Yüklemesi
+                                </Badge>
+                              ) : null}
+                              {row.note ? (
+                                <div
+                                  className="group relative inline-flex items-center"
+                                  title={`Forecast Notu: ${row.note}`}
+                                >
+                                  <Badge
+                                    variant="outline"
+                                    className="cursor-pointer border-amber-300 bg-amber-50 text-[10px] font-bold text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/80 dark:text-amber-300 flex items-center gap-1 px-2 py-0.5 shadow-xs transition-all animate-pulse"
+                                  >
+                                    <MessageSquare className="h-3 w-3 text-amber-600 dark:text-amber-400 shrink-0" />
+                                    <span>Not Var</span>
+                                  </Badge>
+
+                                  <div className="absolute left-0 top-full z-40 mt-1.5 hidden w-72 rounded-lg border border-amber-200 bg-white p-3 text-xs text-slate-800 shadow-xl dark:border-amber-800 dark:bg-slate-900 dark:text-slate-100 group-hover:block transition-all">
+                                    <div className="flex items-center gap-1.5 font-bold text-amber-900 dark:text-amber-300 mb-1 border-b border-amber-100 dark:border-amber-900/50 pb-1">
+                                      <StickyNote className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                                      <span>{row.vendorName} Forecast Notu</span>
+                                    </div>
+                                    <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-slate-700 dark:text-slate-200 font-sans">
+                                      {row.note}
+                                    </p>
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
                             {row.isBelowBacklog ? (
                               <div className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-red-700 dark:text-red-300">
                                 <AlertTriangle className="h-3.5 w-3.5" />
@@ -868,10 +1072,369 @@ export default function ForecastInputPage() {
         )}
       </div>
 
+      {/* Sleek Side-by-Side Forecast Trend Charts */}
+      {weeklyTrend.length === 0 || weeklyTrend.every((w) => w.revenue === 0 && w.gp === 0) ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-6 text-center text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-900 font-sans shadow-sm">
+          Seçili mali dönem için henüz haftalık forecast trend verisi bulunmuyor.
+        </div>
+      ) : (
+        (() => {
+          const maxRev = Math.max(1, ...weeklyTrend.map((w) => w.revenue));
+          const maxGp = Math.max(1, ...weeklyTrend.map((w) => w.gp));
+          const maxGpPercent = Math.max(10, ...weeklyTrend.map((w) => (w.revenue > 0 ? (w.gp / w.revenue) * 100 : 0)));
+          const maxGpPercentScaled = Math.min(100, Math.ceil(maxGpPercent / 10) * 10 || 50);
+
+          const width = 450;
+          const height = 220;
+          const paddingY = 30;
+
+          // Chart 1 (Revenue): Left padding 55, Right 20
+          const revPadLeft = 55;
+          const revPadRight = 20;
+          const revChartW = width - revPadLeft - revPadRight;
+          const revChartH = height - paddingY * 2;
+
+          const pointsRev = weeklyTrend.map((item, idx) => {
+            const x = revPadLeft + (idx / (weeklyTrend.length - 1)) * revChartW;
+            const y = height - paddingY - (item.revenue / maxRev) * revChartH;
+            return { x, y, item };
+          });
+
+          // Chart 2 (GP & GP%): Left padding 55, Right 45
+          const gpPadLeft = 55;
+          const gpPadRight = 45;
+          const gpChartW = width - gpPadLeft - gpPadRight;
+          const gpChartH = height - paddingY * 2;
+
+          const pointsGp = weeklyTrend.map((item, idx) => {
+            const x = gpPadLeft + (idx / (weeklyTrend.length - 1)) * gpChartW;
+            const y = height - paddingY - (item.gp / maxGp) * gpChartH;
+            return { x, y, item };
+          });
+
+          const pointsGpPercent = weeklyTrend.map((item, idx) => {
+            const gpPct = item.revenue > 0 ? (item.gp / item.revenue) * 100 : 0;
+            const x = gpPadLeft + (idx / (weeklyTrend.length - 1)) * gpChartW;
+            const y = height - paddingY - (gpPct / maxGpPercentScaled) * gpChartH;
+            return { x, y, item, gpPct };
+          });
+
+          const buildSmoothPath = (pts: { x: number; y: number }[]) => {
+            if (pts.length === 0) return "";
+            let d = `M ${pts[0].x},${pts[0].y}`;
+            for (let i = 0; i < pts.length - 1; i++) {
+              const p0 = pts[i];
+              const p1 = pts[i + 1];
+              const cp1x = p0.x + (p1.x - p0.x) / 2;
+              const cp1y = p0.y;
+              const cp2x = p1.x - (p1.x - p0.x) / 2;
+              const cp2y = p1.y;
+              d += ` C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p1.x},${p1.y}`;
+            }
+            return d;
+          };
+
+          const revLineD = buildSmoothPath(pointsRev);
+          const revAreaD = `${revLineD} L ${pointsRev[pointsRev.length - 1].x},${height - paddingY} L ${pointsRev[0].x},${height - paddingY} Z`;
+
+          const gpLineD = buildSmoothPath(pointsGp);
+          const gpAreaD = `${gpLineD} L ${pointsGp[pointsGp.length - 1].x},${height - paddingY} L ${pointsGp[0].x},${height - paddingY} Z`;
+
+          const gpPercentLineD = buildSmoothPath(pointsGpPercent);
+
+          const revYTicks = [0, 0.33, 0.66, 1].map((ratio) => ({
+            value: Math.round(maxRev * ratio),
+            y: height - paddingY - ratio * revChartH,
+          }));
+
+          const gpYTicks = [0, 0.33, 0.66, 1].map((ratio) => ({
+            usdValue: Math.round(maxGp * ratio),
+            pctValue: Math.round(maxGpPercentScaled * ratio),
+            y: height - paddingY - ratio * gpChartH,
+          }));
+
+          return (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {/* Left Chart: Revenue Trend */}
+              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-serif text-base font-bold text-[#1F3A2E] dark:text-emerald-400 flex items-center gap-2">
+                      <BarChart3 className="h-4.5 w-4.5 text-emerald-700 dark:text-emerald-400" />
+                      Revenue (NSB) Trendi
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 font-sans">
+                      FY{fiscalYear} Q{quarter} 1-13. haftalık ciro akışı.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-xs font-semibold font-sans">
+                    <span className="h-3 w-3 rounded-xs bg-[#2E5A43]" />
+                    <span className="text-slate-700 dark:text-slate-300">Revenue</span>
+                  </div>
+                </div>
+
+                <div className="relative w-full overflow-hidden pt-1">
+                  <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto font-sans overflow-visible">
+                    <defs>
+                      <linearGradient id="revenue-area-gradient-standalone" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#10B981" stopOpacity="0.45" />
+                        <stop offset="100%" stopColor="#10B981" stopOpacity="0.02" />
+                      </linearGradient>
+                    </defs>
+
+                    {/* Horizontal Gridlines & Y-Axis */}
+                    {revYTicks.map((tick, i) => (
+                      <g key={i}>
+                        <line
+                          x1={revPadLeft}
+                          y1={tick.y}
+                          x2={width - revPadRight}
+                          y2={tick.y}
+                          stroke="currentColor"
+                          strokeDasharray="4 4"
+                          className="text-slate-200 dark:text-slate-800"
+                          strokeWidth="1"
+                        />
+                        <text
+                          x={revPadLeft - 8}
+                          y={tick.y + 3}
+                          textAnchor="end"
+                          className="fill-slate-400 text-[10px] font-mono font-medium"
+                        >
+                          {formatUSD(tick.value).replace(".00", "")}
+                        </text>
+                      </g>
+                    ))}
+
+                    <path d={revAreaD} fill="url(#revenue-area-gradient-standalone)" />
+                    <path d={revLineD} fill="none" stroke="#10B981" strokeWidth="3" strokeLinecap="round" />
+
+                    {pointsRev.map((p) => {
+                      const isSelected = viewWeekNumber === p.item.weekNumber;
+                      const isActiveWeek = p.item.weekNumber === currentContext.weekInQuarter && isSelectedCurrentPeriod;
+
+                      return (
+                        <g key={p.item.weekNumber} className="group cursor-pointer" onClick={() => setViewWeekNumber(p.item.weekNumber)}>
+                          <line
+                            x1={p.x}
+                            y1={paddingY}
+                            x2={p.x}
+                            y2={height - paddingY}
+                            stroke="#10B981"
+                            strokeWidth="1.5"
+                            strokeDasharray="3 3"
+                            className="opacity-0 group-hover:opacity-100 transition-opacity"
+                          />
+                          <circle
+                            cx={p.x}
+                            cy={p.y}
+                            r={isSelected ? "5.5" : "3.5"}
+                            className="fill-emerald-500 stroke-white dark:stroke-slate-900 group-hover:r-6 transition-all shadow-md"
+                            strokeWidth="2"
+                          />
+
+                          {/* Interactive Hover Tooltip Badge */}
+                          <g className="opacity-0 group-hover:opacity-100 transition-all pointer-events-none">
+                            <rect
+                              x={Math.max(10, Math.min(width - 130, p.x - 60))}
+                              y={Math.max(4, p.y - 36)}
+                              width="120"
+                              height="26"
+                              rx="6"
+                              className="fill-slate-900/95 dark:fill-slate-950/95 stroke-emerald-500/50 shadow-lg"
+                              strokeWidth="1"
+                            />
+                            <text
+                              x={Math.max(10, Math.min(width - 130, p.x - 60)) + 60}
+                              y={Math.max(4, p.y - 36) + 17}
+                              textAnchor="middle"
+                              className="fill-emerald-300 text-[10px] font-mono font-bold"
+                            >
+                              H{p.item.weekNumber}: {formatUSD(p.item.revenue)}
+                            </text>
+                          </g>
+
+                          <text
+                            x={p.x}
+                            y={height - 6}
+                            textAnchor="middle"
+                            className={`text-[10px] font-mono font-bold transition-all ${
+                              isSelected
+                                ? "fill-emerald-600 dark:fill-emerald-400 font-extrabold text-[11px]"
+                                : isActiveWeek
+                                ? "fill-emerald-700 dark:fill-emerald-300"
+                                : "fill-slate-500 group-hover:fill-slate-900 dark:group-hover:fill-slate-100"
+                            }`}
+                          >
+                            H{p.item.weekNumber}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </div>
+              </div>
+
+              {/* Right Chart: GP & % Karlılık Trend */}
+              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-serif text-base font-bold text-[#1F3A2E] dark:text-emerald-400 flex items-center gap-2">
+                      <BarChart3 className="h-4.5 w-4.5 text-amber-600 dark:text-amber-400" />
+                      GP (Brüt Kâr) & % Karlılık Trendi
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 font-sans">
+                      FY{fiscalYear} Q{quarter} 1-13. haftalık brüt kâr ve % GP oranı.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs font-semibold font-sans">
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-3 w-3 rounded-xs bg-amber-500" />
+                      <span className="text-slate-700 dark:text-slate-300">GP</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-3 w-3 rounded-full bg-cyan-500" />
+                      <span className="text-slate-700 dark:text-slate-300">GP%</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="relative w-full overflow-hidden pt-1">
+                  <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto font-sans overflow-visible">
+                    <defs>
+                      <linearGradient id="gp-area-gradient-standalone" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.4" />
+                        <stop offset="100%" stopColor="#F59E0B" stopOpacity="0.02" />
+                      </linearGradient>
+                    </defs>
+
+                    {/* Horizontal Gridlines, Left Y-Axis (GP USD) & Right Y-Axis (% GP) */}
+                    {gpYTicks.map((tick, i) => (
+                      <g key={i}>
+                        <line
+                          x1={gpPadLeft}
+                          y1={tick.y}
+                          x2={width - gpPadRight}
+                          y2={tick.y}
+                          stroke="currentColor"
+                          strokeDasharray="4 4"
+                          className="text-slate-200 dark:text-slate-800"
+                          strokeWidth="1"
+                        />
+                        <text
+                          x={gpPadLeft - 8}
+                          y={tick.y + 3}
+                          textAnchor="end"
+                          className="fill-slate-400 text-[10px] font-mono font-medium"
+                        >
+                          {formatUSD(tick.usdValue).replace(".00", "")}
+                        </text>
+                        <text
+                          x={width - gpPadRight + 8}
+                          y={tick.y + 3}
+                          textAnchor="start"
+                          className="fill-cyan-600 dark:fill-cyan-400 text-[10px] font-mono font-bold"
+                        >
+                          %{tick.pctValue}
+                        </text>
+                      </g>
+                    ))}
+
+                    <path d={gpAreaD} fill="url(#gp-area-gradient-standalone)" />
+                    <path d={gpLineD} fill="none" stroke="#F59E0B" strokeWidth="2.5" strokeLinecap="round" />
+
+                    <path d={gpPercentLineD} fill="none" stroke="#06B6D4" strokeWidth="2.5" strokeDasharray="5 3" strokeLinecap="round" />
+
+                    {pointsGp.map((p, idx) => {
+                      const pctP = pointsGpPercent[idx];
+                      const isSelected = viewWeekNumber === p.item.weekNumber;
+                      const isActiveWeek = p.item.weekNumber === currentContext.weekInQuarter && isSelectedCurrentPeriod;
+
+                      return (
+                        <g key={p.item.weekNumber} className="group cursor-pointer" onClick={() => setViewWeekNumber(p.item.weekNumber)}>
+                          <line
+                            x1={p.x}
+                            y1={paddingY}
+                            x2={p.x}
+                            y2={height - paddingY}
+                            stroke="#F59E0B"
+                            strokeWidth="1.5"
+                            strokeDasharray="3 3"
+                            className="opacity-0 group-hover:opacity-100 transition-opacity"
+                          />
+                          <circle
+                            cx={p.x}
+                            cy={p.y}
+                            r={isSelected ? "5" : "3.5"}
+                            className="fill-amber-500 stroke-white dark:stroke-slate-900 group-hover:r-5.5 transition-all shadow-md"
+                            strokeWidth="1.5"
+                          />
+                          <circle
+                            cx={pctP.x}
+                            cy={pctP.y}
+                            r={isSelected ? "4.5" : "3"}
+                            className="fill-cyan-500 stroke-white dark:stroke-slate-900 group-hover:r-5 transition-all shadow-md"
+                            strokeWidth="1.5"
+                          />
+
+                          {/* Interactive Hover Tooltip Badge */}
+                          <g className="opacity-0 group-hover:opacity-100 transition-all pointer-events-none">
+                            <rect
+                              x={Math.max(10, Math.min(width - 135, p.x - 62.5))}
+                              y={Math.max(4, Math.min(p.y, pctP.y) - 44)}
+                              width="125"
+                              height="36"
+                              rx="6"
+                              className="fill-slate-900/95 dark:fill-slate-950/95 stroke-amber-500/50 shadow-lg"
+                              strokeWidth="1"
+                            />
+                            <text
+                              x={Math.max(10, Math.min(width - 135, p.x - 62.5)) + 62.5}
+                              y={Math.max(4, Math.min(p.y, pctP.y) - 44) + 15}
+                              textAnchor="middle"
+                              className="fill-amber-300 text-[10px] font-mono font-bold"
+                            >
+                              GP: {formatUSD(p.item.gp)}
+                            </text>
+                            <text
+                              x={Math.max(10, Math.min(width - 135, p.x - 62.5)) + 62.5}
+                              y={Math.max(4, Math.min(p.y, pctP.y) - 44) + 29}
+                              textAnchor="middle"
+                              className="fill-cyan-300 text-[10px] font-mono font-bold"
+                            >
+                              GP%: {formatPercent(pctP.gpPct)}
+                            </text>
+                          </g>
+
+                          <text
+                            x={p.x}
+                            y={height - 6}
+                            textAnchor="middle"
+                            className={`text-[10px] font-mono font-bold transition-all ${
+                              isSelected
+                                ? "fill-amber-600 dark:fill-amber-400 font-extrabold text-[11px]"
+                                : isActiveWeek
+                                ? "fill-amber-700 dark:fill-amber-300"
+                                : "fill-slate-500 group-hover:fill-slate-900 dark:group-hover:fill-slate-100"
+                            }`}
+                          >
+                            H{p.item.weekNumber}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </div>
+              </div>
+            </div>
+          );
+        })()
+      )}
+
       <div className="flex justify-end">
         <Button
           type="button"
-          onClick={() => setIsBulkUploadModalOpen(true)}
+          onClick={handleOpenBulkModal}
           className="h-9 bg-[#2E5A43] px-4 text-white hover:bg-[#1F3A2E]"
         >
           <Upload className="h-4 w-4" />
@@ -897,9 +1460,39 @@ export default function ForecastInputPage() {
               Forecast XLS Bulk Yükleme
             </DialogTitle>
             <DialogDescription className="text-xs text-slate-500">
-              FY{fiscalYear} - Q{quarter} forecast verileri için XLS veya XLSX dosyası seçin.
+              FY{fiscalYear} - Q{quarter} dönemi için seçilen haftaya forecast verilerini yükleyin.
             </DialogDescription>
           </DialogHeader>
+
+          {/* Week Selection for Forecast Bulk Upload */}
+          <div className="space-y-1.5 rounded-lg border border-emerald-200/60 bg-emerald-50/50 p-3.5 dark:border-emerald-900/40 dark:bg-emerald-950/20">
+            <Label htmlFor="forecast-bulk-week-select" className="text-xs font-semibold text-slate-700 dark:text-slate-300 font-sans">
+              Yüklenecek Hafta Seçimi:
+            </Label>
+            <div className="flex items-center gap-2">
+              <Select
+                value={bulkWeekNumber.toString()}
+                onValueChange={(val) => { if (val) setBulkWeekNumber(parseInt(val)); }}
+              >
+                <SelectTrigger id="forecast-bulk-week-select" className="h-9 border-slate-200 bg-white text-xs font-semibold focus:outline-none dark:border-slate-800 dark:bg-slate-900">
+                  <SelectValue placeholder="Hafta Seçin" />
+                </SelectTrigger>
+                <SelectContent className="bg-white border-slate-200">
+                  {Array.from({ length: 13 }, (_, i) => i + 1).map((w) => (
+                    <SelectItem key={w} value={w.toString()} className="text-xs font-sans">
+                      Hafta {w}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Badge className="bg-[#1F3A2E] text-white shrink-0 px-2.5 py-1 text-xs">
+                FY{fiscalYear} Q{quarter} - {bulkWeekNumber}. Hafta
+              </Badge>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Yüklediğiniz Excel satırları <strong>{bulkWeekNumber}. Hafta</strong> forecast verisi olarak kaydedilecektir.
+            </p>
+          </div>
 
           <div
             className="rounded-lg border-2 border-dashed border-slate-200 bg-slate-50/70 p-8 text-center dark:border-slate-800 dark:bg-slate-950/30"
@@ -1073,6 +1666,22 @@ export default function ForecastInputPage() {
                   className="border-slate-200 pl-7 focus-visible:ring-emerald-700"
                 />
               </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="forecast-note" className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 font-sans">
+                <MessageSquare className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                Forecast Notu (Opsiyonel)
+              </Label>
+              <textarea
+                id="forecast-note"
+                rows={3}
+                placeholder="Bu üretici forecast'i için özel bir açıklama veya not girin..."
+                value={noteInput}
+                onChange={(event) => setNoteInput(event.target.value)}
+                disabled={isSubmitting}
+                className="w-full rounded-md border border-slate-200 bg-white p-2.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
+              />
             </div>
 
             <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 dark:bg-slate-800/40">

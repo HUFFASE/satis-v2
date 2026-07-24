@@ -47,25 +47,23 @@ type DashboardData = {
     weekInQuarter: number;
   };
   selectedFiscalYear: number;
-  selectedQuarters: number[];
+  selectedQuarter: number;
+  isCurrentQuarter: boolean;
   user: {
     role?: string | null;
     name?: string | null;
   };
   current: MetricSet;
-  yearly: MetricSet;
   managers: Array<{
     id: string;
     managerName: string;
     current: MetricSet;
-    yearly: MetricSet;
     forecastedCount: number;
     targetCount: number;
     vendors: Array<{
       vendorId: string;
       vendorName: string;
       current: MetricSet;
-      yearly: MetricSet;
       hasForecast: boolean;
       hasTarget: boolean;
     }>;
@@ -77,7 +75,6 @@ type DashboardData = {
     vendorName: string;
     detail: string;
   }>;
-  quarterlySummary: Array<MetricSet & { quarter: number }>;
 };
 
 interface DashboardClientProps {
@@ -106,66 +103,6 @@ function getGpTone(value: number) {
   if (value >= 20) return "text-emerald-700 dark:text-emerald-400";
   if (value >= 10) return "text-amber-700 dark:text-amber-400";
   return "text-red-700 dark:text-red-400";
-}
-
-function getAchievementFill(value: number) {
-  if (value >= 100) return "bg-emerald-700";
-  if (value >= 75) return "bg-amber-500";
-  return "bg-red-600";
-}
-
-function MiniBars({
-  values,
-  colorClass = "bg-emerald-700",
-}: {
-  values: number[];
-  colorClass?: string;
-}) {
-  const maxValue = Math.max(1, ...values);
-
-  return (
-    <div className="flex h-10 items-end gap-1" aria-hidden="true">
-      {values.map((value, index) => (
-        <span
-          key={`${value}-${index}`}
-          className={`w-2 rounded-t-sm ${colorClass}`}
-          style={{ height: `${Math.max(12, (value / maxValue) * 100)}%` }}
-        />
-      ))}
-    </div>
-  );
-}
-
-function Sparkline({
-  values,
-  stroke = "#2E5A43",
-}: {
-  values: number[];
-  stroke?: string;
-}) {
-  const width = 112;
-  const height = 40;
-  const maxValue = Math.max(1, ...values);
-  const points = values
-    .map((value, index) => {
-      const x = values.length <= 1 ? width : (index / (values.length - 1)) * width;
-      const y = height - (value / maxValue) * (height - 6) - 3;
-      return `${x},${y}`;
-    })
-    .join(" ");
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="h-10 w-28" aria-hidden="true">
-      <polyline
-        points={points}
-        fill="none"
-        stroke={stroke}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="3"
-      />
-    </svg>
-  );
 }
 
 function DonutGauge({
@@ -210,13 +147,11 @@ function KpiCard({
   value,
   subValue,
   icon: Icon,
-  visual,
 }: {
   label: string;
   value: string;
   subValue: string;
   icon: React.ElementType;
-  visual?: React.ReactNode;
 }) {
   return (
     <div className="grid min-h-32 grid-cols-[1fr_auto] gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -225,80 +160,34 @@ function KpiCard({
         <div className="mt-1 break-words font-mono text-xl font-bold leading-tight text-slate-950 tabular-nums dark:text-slate-100 sm:text-2xl">{value}</div>
         <div className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">{subValue}</div>
       </div>
-      <div className="flex flex-col items-end justify-between gap-2">
+      <div className="flex items-start justify-end">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
           <Icon className="h-5 w-5" />
         </div>
-        {visual}
       </div>
-    </div>
-  );
-}
-
-function ProgressBar({ value, colorClass = "bg-[#2E5A43]" }: { value: number; colorClass?: string }) {
-  const clamped = Math.max(0, Math.min(140, value));
-  return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-      <div
-        className={`h-full rounded-full ${colorClass}`}
-        style={{ width: `${Math.min(100, clamped)}%` }}
-      />
     </div>
   );
 }
 
 export default function DashboardClient({ data: initialData }: DashboardClientProps) {
   const [data, setData] = useState(initialData);
-  const [viewMode, setViewMode] = useState<"current" | "yearly">("current");
-  const [selectedQuarters, setSelectedQuarters] = useState<number[]>(initialData.selectedQuarters);
   const [isLoading, setIsLoading] = useState(false);
   const [expandedManagers, setExpandedManagers] = useState<Record<string, boolean>>({});
 
-  const totals = viewMode === "current" ? data.current : data.yearly;
-  const selectedQuarterLabel = data.selectedQuarters.map((quarter) => `Q${quarter}`).join(", ");
-  const periodLabel =
-    viewMode === "current"
-      ? `FY${data.currentContext.fiscalYear} Q${data.currentContext.quarter} - Hafta ${data.currentContext.weekInQuarter}`
-      : data.selectedQuarters.length === 4
-        ? `FY${data.selectedFiscalYear} yıllık`
-        : `FY${data.selectedFiscalYear} - ${selectedQuarterLabel}`;
-
-  const maxQuarterValue = useMemo(
-    () =>
-      Math.max(
-        1,
-        ...data.quarterlySummary.map((quarter) =>
-          Math.max(quarter.targetRevenue, quarter.forecastRevenue, quarter.backlogRevenue)
-        )
-      ),
-    [data.quarterlySummary]
-  );
-  const maxQuarterGpValue = useMemo(
-    () =>
-      Math.max(
-        1,
-        ...data.quarterlySummary.map((quarter) =>
-          Math.max(quarter.targetGp, quarter.forecastGp, quarter.backlogGp)
-        )
-      ),
-    [data.quarterlySummary]
-  );
-  const forecastSeries = data.quarterlySummary.map((quarter) => quarter.forecastRevenue);
-  const backlogSeries = data.quarterlySummary.map((quarter) => quarter.backlogRevenue);
-  const targetGpSeries = data.quarterlySummary.map((quarter) => quarter.targetGp);
-  const forecastGpSeries = data.quarterlySummary.map((quarter) => quarter.forecastGp);
-  const backlogGpSeries = data.quarterlySummary.map((quarter) => quarter.backlogGp);
-  const gpAchievementSeries = data.quarterlySummary.map((quarter) => quarter.gpAchievement);
+  const totals = data.current;
+  const periodLabel = data.isCurrentQuarter
+    ? `FY${data.selectedFiscalYear} Q${data.selectedQuarter} - Hafta ${data.currentContext.weekInQuarter}`
+    : `FY${data.selectedFiscalYear} Q${data.selectedQuarter}`;
   const managerChartRows = useMemo(
     () =>
       data.managers
         .map((manager) => ({
           id: manager.id,
           name: manager.managerName,
-          metrics: viewMode === "current" ? manager.current : manager.yearly,
+          metrics: manager.current,
         }))
         .sort((a, b) => b.metrics.forecastGp - a.metrics.forecastGp),
-    [data.managers, viewMode]
+    [data.managers]
   );
   const maxManagerForecastGp = Math.max(1, ...managerChartRows.map((row) => row.metrics.forecastGp));
 
@@ -309,37 +198,20 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
     }));
   };
 
-  const refreshData = useCallback(
-    async (nextQuarters: number[]) => {
-      setIsLoading(true);
-      try {
-        const dashboardData = await getDashboardData(data.selectedFiscalYear, nextQuarters);
-        setData(dashboardData);
-        setExpandedManagers({});
-      } catch (error: unknown) {
-        toast.error(error instanceof Error ? error.message : "Dashboard verileri alınırken hata oluştu.");
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [data.selectedFiscalYear]
-  );
+  const selectQuarter = useCallback(async (quarter: number) => {
+    if (quarter === data.selectedQuarter) return;
 
-  const toggleQuarter = (quarter: number) => {
-    const exists = selectedQuarters.includes(quarter);
-    const nextQuarters = exists
-      ? selectedQuarters.filter((selectedQuarter) => selectedQuarter !== quarter)
-      : [...selectedQuarters, quarter].sort((a, b) => a - b);
-
-    if (nextQuarters.length === 0) {
-      toast.error("En az bir çeyrek seçili olmalı.");
-      return;
+    setIsLoading(true);
+    try {
+      const dashboardData = await getDashboardData(quarter);
+      setData(dashboardData);
+      setExpandedManagers({});
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Dashboard verileri alınırken hata oluştu.");
+    } finally {
+      setIsLoading(false);
     }
-
-    setSelectedQuarters(nextQuarters);
-    setViewMode("yearly");
-    void refreshData(nextQuarters);
-  };
+  }, [data.selectedQuarter]);
 
   return (
     <div className="space-y-6 p-6">
@@ -349,7 +221,7 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
             Dashboard
           </h2>
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            Mevcut dönem ve yıllık hedef, forecast, backlog görünümü.
+            Seçili çeyrek için hedef, forecast ve son girilen backlog görünümü.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -360,40 +232,21 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
                 key={quarter}
                 type="button"
                 size="sm"
-                variant={selectedQuarters.includes(quarter) ? "default" : "ghost"}
-                onClick={() => toggleQuarter(quarter)}
-                className={selectedQuarters.includes(quarter) ? "bg-[#2E5A43] text-white hover:bg-[#1F3A2E]" : ""}
+                variant={data.selectedQuarter === quarter ? "default" : "ghost"}
+                onClick={() => void selectQuarter(quarter)}
+                disabled={isLoading}
+                className={data.selectedQuarter === quarter ? "bg-[#2E5A43] text-white hover:bg-[#1F3A2E]" : ""}
               >
                 Q{quarter}
               </Button>
             ))}
-          </div>
-          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <Button
-              type="button"
-              size="sm"
-              variant={viewMode === "current" ? "default" : "ghost"}
-              onClick={() => setViewMode("current")}
-              className={viewMode === "current" ? "bg-[#2E5A43] text-white hover:bg-[#1F3A2E]" : ""}
-            >
-              Mevcut Dönem
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant={viewMode === "yearly" ? "default" : "ghost"}
-              onClick={() => setViewMode("yearly")}
-              className={viewMode === "yearly" ? "bg-[#2E5A43] text-white hover:bg-[#1F3A2E]" : ""}
-            >
-              Yıllık / Seçili
-            </Button>
           </div>
         </div>
       </div>
 
       {isLoading ? (
         <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm font-medium text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          Dashboard verileri güncelleniyor...
+          Seçili çeyrek verileri güncelleniyor...
         </div>
       ) : null}
 
@@ -403,42 +256,36 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
           value={formatUSD(totals.targetGp)}
           subValue={`Target NSB ${formatUSD(totals.targetRevenue)}`}
           icon={Target}
-          visual={<MiniBars values={targetGpSeries} colorClass="bg-sky-600" />}
         />
         <KpiCard
           label="Forecast GP"
           value={formatUSD(totals.forecastGp)}
           subValue={`Forecast NSB ${formatUSD(totals.forecastRevenue)}`}
           icon={TrendingUp}
-          visual={<Sparkline values={forecastGpSeries} />}
         />
         <KpiCard
           label="GP Achievement"
           value={formatPercent(totals.gpAchievement)}
           subValue={`NSB achievement ${formatPercent(totals.revenueAchievement)}`}
           icon={Percent}
-          visual={<MiniBars values={gpAchievementSeries} colorClass={getAchievementFill(totals.gpAchievement)} />}
         />
         <KpiCard
           label="Backlog GP"
           value={formatUSD(totals.backlogGp)}
           subValue={`Backlog NSB ${formatUSD(totals.backlogRevenue)}`}
           icon={DollarSign}
-          visual={<MiniBars values={backlogGpSeries} colorClass="bg-indigo-600" />}
         />
         <KpiCard
           label="Forecast NSB"
           value={formatUSD(totals.forecastRevenue)}
           subValue={`Target NSB ${formatUSD(totals.targetRevenue)}`}
           icon={LineChart}
-          visual={<Sparkline values={forecastSeries} stroke="#475569" />}
         />
         <KpiCard
           label="Forecast GP%"
           value={formatPercent(totals.forecastGpPercent)}
           subValue={`Backlog GP% ${formatPercent(totals.backlogGpPercent)}`}
           icon={BarChart3}
-          visual={<MiniBars values={backlogSeries} colorClass="bg-slate-500" />}
         />
       </div>
 
@@ -516,7 +363,7 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
             </TableHeader>
             <TableBody>
               {data.managers.map((manager) => {
-                const metrics = viewMode === "current" ? manager.current : manager.yearly;
+                const metrics = manager.current;
                 const isExpanded = expandedManagers[manager.id] ?? false;
                 const ToggleIcon = isExpanded ? ChevronDown : ChevronRight;
 
@@ -557,7 +404,7 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
                     </TableRow>
                     {isExpanded &&
                       manager.vendors.map((vendor) => {
-                        const vendorMetrics = viewMode === "current" ? vendor.current : vendor.yearly;
+                        const vendorMetrics = vendor.current;
                         return (
                           <TableRow key={vendor.vendorId} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
                             <TableCell className="pl-14 font-semibold text-slate-900 dark:text-slate-100">
@@ -628,91 +475,6 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
         </div>
       </div>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h3 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">
-              Yıllık Çeyrek Resmi
-            </h3>
-            <p className="text-xs text-slate-500">Target, forecast ve backlog GP/NSB karşılaştırması.</p>
-          </div>
-          <BarChart3 className="h-5 w-5 text-emerald-700" />
-        </div>
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
-          {data.quarterlySummary.map((quarter) => (
-            <div key={quarter.quarter} className="rounded-lg border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/30">
-              <div className="mb-3 flex items-center justify-between">
-                <span className="font-bold text-slate-900 dark:text-slate-100">Q{quarter.quarter}</span>
-                <span className={`font-mono text-xs font-bold ${getAchievementTone(quarter.revenueAchievement)}`}>
-                  {formatPercent(quarter.revenueAchievement)}
-                </span>
-              </div>
-              <div className="space-y-3">
-                <div>
-                  <div className="mb-1 flex justify-between text-[11px] text-slate-500">
-                    <span>Target GP</span>
-                    <span>{formatUSD(quarter.targetGp)}</span>
-                  </div>
-                  <ProgressBar value={(quarter.targetGp / maxQuarterGpValue) * 100} colorClass="bg-sky-600" />
-                </div>
-                <div>
-                  <div className="mb-1 flex justify-between text-[11px] text-slate-500">
-                    <span>Forecast GP</span>
-                    <span>{formatUSD(quarter.forecastGp)}</span>
-                  </div>
-                  <ProgressBar value={(quarter.forecastGp / maxQuarterGpValue) * 100} colorClass="bg-emerald-700" />
-                </div>
-                <div>
-                  <div className="mb-1 flex justify-between text-[11px] text-slate-500">
-                    <span>Backlog GP</span>
-                    <span>{formatUSD(quarter.backlogGp)}</span>
-                  </div>
-                  <ProgressBar value={(quarter.backlogGp / maxQuarterGpValue) * 100} colorClass="bg-indigo-600" />
-                </div>
-                <div className="border-t border-slate-200 pt-3 dark:border-slate-800">
-                  <div className="mb-1 flex justify-between text-[11px] text-slate-500">
-                    <span>Target NSB</span>
-                    <span>{formatUSD(quarter.targetRevenue)}</span>
-                  </div>
-                  <ProgressBar value={(quarter.targetRevenue / maxQuarterValue) * 100} colorClass="bg-sky-600" />
-                </div>
-                <div>
-                  <div className="mb-1 flex justify-between text-[11px] text-slate-500">
-                    <span>Forecast NSB</span>
-                    <span>{formatUSD(quarter.forecastRevenue)}</span>
-                  </div>
-                  <ProgressBar value={(quarter.forecastRevenue / maxQuarterValue) * 100} colorClass="bg-emerald-700" />
-                </div>
-                <div>
-                  <div className="mb-1 flex justify-between text-[11px] text-slate-500">
-                    <span>Backlog NSB</span>
-                    <span>{formatUSD(quarter.backlogRevenue)}</span>
-                  </div>
-                  <ProgressBar value={(quarter.backlogRevenue / maxQuarterValue) * 100} colorClass="bg-indigo-600" />
-                </div>
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <div className="rounded-md bg-white p-2 dark:bg-slate-900">
-                    <div className="text-[10px] font-semibold uppercase text-slate-400">Forecast GP%</div>
-                    <div className={`font-mono text-xs font-bold ${getGpTone(quarter.forecastGpPercent)}`}>
-                      {formatPercent(quarter.forecastGpPercent)}
-                    </div>
-                  </div>
-                  <div className="rounded-md bg-white p-2 dark:bg-slate-900">
-                    <div className="text-[10px] font-semibold uppercase text-slate-400">Backlog GP%</div>
-                    <div className={`font-mono text-xs font-bold ${getGpTone(quarter.backlogGpPercent)}`}>
-                      {formatPercent(quarter.backlogGpPercent)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
-          <LineChart className="h-4 w-4" />
-          Yıllık görünüm, her çeyreğin aktif forecast toplamını ve yüklenmiş backlog verilerini GP öncelikli gösterir.
-        </div>
-      </div>
     </div>
   );
 }

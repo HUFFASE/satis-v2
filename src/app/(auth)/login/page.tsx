@@ -65,7 +65,7 @@ function LoginForm() {
         router.push(callbackUrl);
         router.refresh();
       }
-    } catch (err) {
+    } catch {
       setError("Beklenmedik bir hata oluştu. Lütfen tekrar deneyin.");
     } finally {
       setIsLoading(false);

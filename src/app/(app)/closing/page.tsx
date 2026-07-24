@@ -42,7 +42,10 @@ import {
   TrendingUp,
   Upload,
   Users2,
+  Filter,
+  X,
 } from "lucide-react";
+import { MultiSelectFilter, FilterOption } from "@/components/ui/multi-select-filter";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 import { getClosings, importClosingsFromXls } from "./actions";
 
@@ -142,6 +145,68 @@ export default function ClosingPage() {
   const [bulkFileName, setBulkFileName] = useState("");
   const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
 
+  // Multi-select filter states (Satış Müdürü -> Marka)
+  const [selectedManagerIds, setSelectedManagerIds] = useState<string[]>([]);
+  const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
+
+  // Sales Manager options for multi-select filter
+  const managerOptions = useMemo<FilterOption[]>(() => {
+    const map = new Map<string, { label: string; count: number }>();
+    for (const row of rows) {
+      const id = row.managerId ?? "unassigned";
+      const label = row.managerName ?? "Atanmamış";
+      const existing = map.get(id);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        map.set(id, { label, count: 1 });
+      }
+    }
+    return Array.from(map.entries())
+      .map(([value, { label, count }]) => ({ value, label, count }))
+      .sort((a, b) => a.label.localeCompare(b.label, "tr"));
+  }, [rows]);
+
+  // Vendor options for multi-select filter (cascaded by selected Sales Managers)
+  const vendorOptions = useMemo<FilterOption[]>(() => {
+    const relevantRows = selectedManagerIds.length > 0
+      ? rows.filter((row) => selectedManagerIds.includes(row.managerId ?? "unassigned"))
+      : rows;
+
+    const map = new Map<string, { label: string; count: number }>();
+    for (const row of relevantRows) {
+      map.set(row.vendorId, { label: row.vendorName, count: 1 });
+    }
+    return Array.from(map.entries())
+      .map(([value, { label }]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "tr"));
+  }, [rows, selectedManagerIds]);
+
+  const handleManagerChange = (newManagerIds: string[]) => {
+    setSelectedManagerIds(newManagerIds);
+    if (newManagerIds.length > 0) {
+      const validVendorIds = rows
+        .filter((row) => newManagerIds.includes(row.managerId ?? "unassigned"))
+        .map((row) => row.vendorId);
+      setSelectedVendorIds((prev) => prev.filter((id) => validVendorIds.includes(id)));
+    }
+  };
+
+  const clearAllFilters = () => {
+    setSelectedManagerIds([]);
+    setSelectedVendorIds([]);
+  };
+
+  // Filtered rows array
+  const filteredRows = useMemo(() => {
+    return rows.filter((row) => {
+      const managerId = row.managerId ?? "unassigned";
+      const matchesManager = selectedManagerIds.length === 0 || selectedManagerIds.includes(managerId);
+      const matchesVendor = selectedVendorIds.length === 0 || selectedVendorIds.includes(row.vendorId);
+      return matchesManager && matchesVendor;
+    });
+  }, [rows, selectedManagerIds, selectedVendorIds]);
+
   const fiscalYearsRange = [
     currentContext.fiscalYear - 1,
     currentContext.fiscalYear,
@@ -164,7 +229,7 @@ export default function ClosingPage() {
     void Promise.resolve().then(loadClosings);
   }, [loadClosings]);
 
-  const totals = rows.reduce(
+  const totals = filteredRows.reduce(
     (acc, row) => {
       acc.targetRevenue += row.targetRevenue;
       acc.targetGp += row.targetGp;
@@ -189,7 +254,7 @@ export default function ClosingPage() {
   const managerGroups = useMemo<ManagerClosingGroup[]>(() => {
     const groupMap = new Map<string, ManagerClosingGroup>();
 
-    for (const row of rows) {
+    for (const row of filteredRows) {
       const groupId = row.managerId ?? "unassigned";
       const existing =
         groupMap.get(groupId) ??
@@ -223,7 +288,7 @@ export default function ClosingPage() {
         rows: group.rows.sort((a, b) => a.vendorName.localeCompare(b.vendorName, "tr")),
       }))
       .sort((a, b) => a.managerName.localeCompare(b.managerName, "tr"));
-  }, [rows]);
+  }, [filteredRows]);
 
   const handleSort = (key: ClosingSortKey) => {
     if (sortKey === key) {
@@ -361,6 +426,49 @@ export default function ClosingPage() {
           <Badge className="bg-emerald-800 text-emerald-50 hover:bg-emerald-800">
             FY{fiscalYear} Q{quarter}
           </Badge>
+        </div>
+      </div>
+
+      {/* Dynamic Multi-Select Filter Bar (Satış Müdürü -> Marka) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 flex items-center gap-1.5 mr-1">
+            <Filter className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" /> Filtreler:
+          </span>
+
+          <MultiSelectFilter
+            title="Satış Müdürü"
+            options={managerOptions}
+            selectedValues={selectedManagerIds}
+            onChange={handleManagerChange}
+            placeholder="Satış Müdürü ara..."
+            icon={<Users2 className="h-3.5 w-3.5 text-slate-500" />}
+          />
+
+          <MultiSelectFilter
+            title="Marka"
+            options={vendorOptions}
+            selectedValues={selectedVendorIds}
+            onChange={setSelectedVendorIds}
+            placeholder="Marka ara..."
+            icon={<FileSpreadsheet className="h-3.5 w-3.5 text-slate-500" />}
+          />
+
+          {(selectedManagerIds.length > 0 || selectedVendorIds.length > 0) && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={clearAllFilters}
+              className="h-9 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+            >
+              <X className="mr-1 h-3.5 w-3.5" /> Filtreleri Temizle
+            </Button>
+          )}
+        </div>
+
+        <div className="text-xs text-slate-500 font-medium">
+          Gösterilen: <span className="font-bold text-slate-900 dark:text-slate-100">{filteredRows.length}</span> / {rows.length} marka
         </div>
       </div>
 

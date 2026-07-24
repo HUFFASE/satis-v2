@@ -29,7 +29,11 @@ import {
   Percent,
   TrendingUp,
   Users2,
+  Filter,
+  X,
+  FileSpreadsheet,
 } from "lucide-react";
+import { MultiSelectFilter, FilterOption } from "@/components/ui/multi-select-filter";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 import { getForecastHistoryData, getForecastTrendData } from "./actions";
 
@@ -253,6 +257,69 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
   const [trendManagerIds, setTrendManagerIds] = useState<string[]>([]);
   const [trendVendorIds, setTrendVendorIds] = useState<string[]>([]);
 
+  // Multi-select filter states for History view (Satış Müdürü -> Marka)
+  const [selectedManagerIds, setSelectedManagerIds] = useState<string[]>([]);
+  const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
+
+  const managerOptions = useMemo<FilterOption[]>(() => {
+    return data.managers.map((m) => ({
+      value: m.id,
+      label: m.managerName,
+      count: m.vendors.length,
+    })).sort((a, b) => a.label.localeCompare(b.label, "tr"));
+  }, [data.managers]);
+
+  const vendorOptions = useMemo<FilterOption[]>(() => {
+    const relevantManagers = selectedManagerIds.length > 0
+      ? data.managers.filter((m) => selectedManagerIds.includes(m.id))
+      : data.managers;
+
+    const map = new Map<string, string>();
+    for (const m of relevantManagers) {
+      for (const v of m.vendors) {
+        map.set(v.vendorId, v.vendorName);
+      }
+    }
+    return Array.from(map.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "tr"));
+  }, [data.managers, selectedManagerIds]);
+
+  const handleManagerChange = (newManagerIds: string[]) => {
+    setSelectedManagerIds(newManagerIds);
+    if (newManagerIds.length > 0) {
+      const validVendorIds = new Set<string>();
+      for (const m of data.managers) {
+        if (newManagerIds.includes(m.id)) {
+          for (const v of m.vendors) {
+            validVendorIds.add(v.vendorId);
+          }
+        }
+      }
+      setSelectedVendorIds((prev) => prev.filter((id) => validVendorIds.has(id)));
+    }
+  };
+
+  const clearAllFilters = () => {
+    setSelectedManagerIds([]);
+    setSelectedVendorIds([]);
+  };
+
+  const filteredManagers = useMemo(() => {
+    return data.managers
+      .filter((m) => selectedManagerIds.length === 0 || selectedManagerIds.includes(m.id))
+      .map((m) => {
+        const filteredVendors = m.vendors.filter(
+          (v) => selectedVendorIds.length === 0 || selectedVendorIds.includes(v.vendorId)
+        );
+        return {
+          ...m,
+          vendors: filteredVendors,
+        };
+      })
+      .filter((m) => m.vendors.length > 0);
+  }, [data.managers, selectedManagerIds, selectedVendorIds]);
+
   const fiscalYearsRange = [
     currentContext.fiscalYear - 1,
     currentContext.fiscalYear,
@@ -412,6 +479,49 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
         </div>
       </div>
 
+      {/* Dynamic Multi-Select Filter Bar (Satış Müdürü -> Marka) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 flex items-center gap-1.5 mr-1">
+            <Filter className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" /> Filtreler:
+          </span>
+
+          <MultiSelectFilter
+            title="Satış Müdürü"
+            options={managerOptions}
+            selectedValues={selectedManagerIds}
+            onChange={handleManagerChange}
+            placeholder="Satış Müdürü ara..."
+            icon={<Users2 className="h-3.5 w-3.5 text-slate-500" />}
+          />
+
+          <MultiSelectFilter
+            title="Marka"
+            options={vendorOptions}
+            selectedValues={selectedVendorIds}
+            onChange={setSelectedVendorIds}
+            placeholder="Marka ara..."
+            icon={<FileSpreadsheet className="h-3.5 w-3.5 text-slate-500" />}
+          />
+
+          {(selectedManagerIds.length > 0 || selectedVendorIds.length > 0) && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={clearAllFilters}
+              className="h-9 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+            >
+              <X className="mr-1 h-3.5 w-3.5" /> Filtreleri Temizle
+            </Button>
+          )}
+        </div>
+
+        <div className="text-xs text-slate-500 font-medium">
+          Gösterilen: <span className="font-bold text-slate-900 dark:text-slate-100">{filteredManagers.length}</span> / {data.managers.length} Satış Müdürü
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Forecast Kayıt" value={data.totals.forecastCount.toString()} subValue={`${data.totals.activeCount} aktif, ${data.totals.archivedCount} arşiv`} icon={Archive} />
         <Kpi label="Forecast NSB" value={formatUSD(data.totals.revenue)} subValue={`GP ${formatUSD(data.totals.gp)} / ${data.totals.vendorCount} marka`} icon={TrendingUp} />
@@ -521,14 +631,14 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
             </TableRow>
           </TableHeader>
           <TableBody>
-            {data.managers.length === 0 ? (
+            {filteredManagers.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={8} className="h-32 text-center text-sm text-slate-500">
-                  Seçili çeyrek için forecast bulunamadı.
+                  Seçili filtreler veya çeyrek için forecast bulunamadı.
                 </TableCell>
               </TableRow>
             ) : viewMode === "manager" ? (
-              data.managers.map((manager) => {
+              filteredManagers.map((manager) => {
                 const isExpanded = expandedManagers[manager.id] ?? false;
                 const ToggleIcon = isExpanded ? ChevronDown : ChevronRight;
 
@@ -599,7 +709,7 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
                 );
               })
             ) : (
-              data.managers.map((manager) => {
+              filteredManagers.map((manager) => {
                 const isExpanded = expandedManagers[manager.id] ?? false;
                 const ToggleIcon = isExpanded ? ChevronDown : ChevronRight;
 

@@ -1,5 +1,8 @@
-import { auth } from "@/auth";
+import NextAuth from "next-auth";
+import { authConfig } from "@/auth.config";
 import { NextResponse } from "next/server";
+
+const { auth } = NextAuth(authConfig);
 
 export const proxy = auth((req) => {
   const { nextUrl } = req;
@@ -30,7 +33,7 @@ export const proxy = auth((req) => {
       callbackUrl += nextUrl.search;
     }
     const encodedCallbackUrl = encodeURIComponent(callbackUrl);
-    
+
     return NextResponse.redirect(
       new URL(`/login?callbackUrl=${encodedCallbackUrl}`, nextUrl)
     );
@@ -45,6 +48,5 @@ export const proxy = auth((req) => {
 });
 
 export const config = {
-  // Protect all paths except NextAuth API, Next.js static compiler assets, and favicon
   matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };
