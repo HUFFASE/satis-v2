@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -59,11 +60,14 @@ import {
   copyPreviousWeekForecastsForManager,
   getActiveForecasts,
   getForecastVersions,
+  getManagerScorecardsAction,
+  getVendorScorecardsAction,
   getSessionUser,
   getWeeklyForecastTrend,
   importForecastFromXls,
   inspectForecastWorkbook,
   submitForecast,
+  uploadCrmExcelAction,
 } from "./actions";
 
 interface ForecastRow {
@@ -101,6 +105,31 @@ interface ForecastVersion {
   submittedAt: Date | string;
   createdAt: Date | string;
   submittedByName: string;
+}
+
+interface ScorecardItem {
+  id: string;
+  managerName: string;
+  weightedCrmPipeline: number;
+  rawCrmPipeline: number;
+  overdueCount: number;
+  crmHealthScore: number;
+  forecastAccuracy: number;
+  revenueAch: number;
+  gpAch: number;
+  overallScore: number;
+  managerComment: string | null;
+}
+
+interface ScorecardVendorItem {
+  id: string;
+  vendorName: string;
+  vendorId: string | null;
+  weightedCrmPipeline: number;
+  rawCrmPipeline: number;
+  overdueCount: number;
+  crmHealthScore: number;
+  totalDeals: number;
 }
 
 interface ManagerForecastGroup {
@@ -285,19 +314,33 @@ export default function ForecastInputPage() {
     currentContext.fiscalYear + 1,
   ];
 
+  // CRM & Scorecard states
+  const [isCrmUploadModalOpen, setIsCrmUploadModalOpen] = useState(false);
+  const [crmFile, setCrmFile] = useState<File | null>(null);
+  const [isCrmSubmitting, setIsCrmSubmitting] = useState(false);
+  const [crmWeekNumber, setCrmWeekNumber] = useState<number>(currentContext.weekInQuarter);
+  const [scorecards, setScorecards] = useState<ScorecardItem[]>([]);
+  const [vendorScorecards, setVendorScorecards] = useState<ScorecardVendorItem[]>([]);
+  const [isScorecardLeaderboardOpen, setIsScorecardLeaderboardOpen] = useState(false);
+
   const [latestUploadWeekNumber, setLatestUploadWeekNumber] = useState<number | null>(null);
 
   const loadForecasts = useCallback(async () => {
     setIsLoading(true);
     try {
-      const selectedWeekParam = viewWeekNumber === "active" ? undefined : viewWeekNumber;
-      const [res, trendData] = await Promise.all([
-        getActiveForecasts(fiscalYear, quarter, selectedWeekParam),
+      const activeCtx = getCurrentFiscalContext();
+      const selectedWeekParam = viewWeekNumber === "active" ? activeCtx.weekInQuarter : viewWeekNumber;
+      const [res, trendData, scorecardData, vendorScorecardData] = await Promise.all([
+        getActiveForecasts(fiscalYear, quarter, viewWeekNumber === "active" ? undefined : viewWeekNumber),
         getWeeklyForecastTrend(fiscalYear, quarter),
+        getManagerScorecardsAction(fiscalYear, quarter, selectedWeekParam),
+        getVendorScorecardsAction(fiscalYear, quarter, selectedWeekParam),
       ]);
       setForecasts(res.rows);
       setLatestUploadWeekNumber(res.latestUploadWeekNumber);
       setWeeklyTrend(trendData);
+      setScorecards(scorecardData);
+      setVendorScorecards(vendorScorecardData);
     } catch (err: unknown) {
       toast.error(getErrorMessage(err, "Forecast verileri yüklenirken hata oluştu."));
     } finally {
@@ -539,6 +582,35 @@ export default function ForecastInputPage() {
       toast.error(getErrorMessage(err, "Forecast XLS yükleme sırasında hata oluştu."));
     } finally {
       setIsBulkSubmitting(false);
+    }
+  };
+
+  const handleCrmUploadSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!crmFile) {
+      toast.error("Lütfen geçerli bir CRM Excel dosyası seçin.");
+      return;
+    }
+
+    setIsCrmSubmitting(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", crmFile);
+
+      const result = await uploadCrmExcelAction(formData, fiscalYear, quarter, crmWeekNumber);
+      if (!result.success) {
+        toast.error(result.error || "CRM dosyası işlenemedi.");
+        return;
+      }
+
+      toast.success(`${result.processedCount} fırsat kaydı işlendi. ${result.managerCount} Satış Müdürü güncellendi.`);
+      setIsCrmUploadModalOpen(false);
+      setCrmFile(null);
+      await loadForecasts();
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err, "CRM Excel dosyası yüklenirken hata oluştu."));
+    } finally {
+      setIsCrmSubmitting(false);
     }
   };
 
@@ -807,6 +879,75 @@ export default function ForecastInputPage() {
         </div>
       </div>
 
+      {/* CRM & Scorecard Executive Banner */}
+      {scorecards.length > 0 && (
+        <div className="rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50/70 via-white to-cyan-50/70 p-4.5 shadow-sm dark:border-emerald-900/50 dark:from-slate-900 dark:via-slate-900 dark:to-slate-900 space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#1F3A2E] text-white shadow-xs">
+                <FileSpreadsheet className="h-5 w-5 text-emerald-400" />
+              </span>
+              <div>
+                <h3 className="font-serif text-sm font-bold text-[#1F3A2E] dark:text-emerald-400 flex items-center gap-2">
+                  Haftalık CRM Fırsat & Satış Müdürü Karneleri ({viewWeekNumber === "active" ? currentContext.weekInQuarter : viewWeekNumber}. Hafta)
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-sans">
+                  CS1_TDSYNNEX Excel dosyasından hesaplanan {scorecards.length} Satış Müdürü ağırlıklı CRM fırsat büyüklüğü ve temizlik puanları.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsScorecardLeaderboardOpen(true)}
+                className="h-8.5 border-emerald-300 bg-white text-emerald-900 hover:bg-emerald-50 text-xs font-bold gap-1.5 dark:border-emerald-800 dark:bg-slate-900 dark:text-emerald-300 shadow-xs"
+              >
+                <Users2 className="h-4 w-4 text-emerald-700 dark:text-emerald-400" /> Tüm Müdür Karneleri ({scorecards.length})
+              </Button>
+              <Link href="/scorecard">
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-8.5 bg-[#1F3A2E] text-white hover:bg-[#2E5A43] text-xs font-bold gap-1.5 shadow-xs"
+                >
+                  <FileSpreadsheet className="h-4 w-4 text-emerald-400" /> Scorecard & CRM Raporu ➔
+                </Button>
+              </Link>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-1">
+            <div className="rounded-lg border border-slate-200/80 bg-white/90 p-3 shadow-xs dark:border-slate-800 dark:bg-slate-950/40">
+              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Topl. Ağırlıklı CRM</span>
+              <span className="font-mono text-base font-extrabold text-emerald-800 dark:text-emerald-300">
+                {formatUSD(scorecards.reduce((acc, s) => acc + s.weightedCrmPipeline, 0))}
+              </span>
+            </div>
+            <div className="rounded-lg border border-slate-200/80 bg-white/90 p-3 shadow-xs dark:border-slate-800 dark:bg-slate-950/40">
+              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Ham CRM Pipeline</span>
+              <span className="font-mono text-base font-bold text-slate-700 dark:text-slate-300">
+                {formatUSD(scorecards.reduce((acc, s) => acc + s.rawCrmPipeline, 0))}
+              </span>
+            </div>
+            <div className="rounded-lg border border-slate-200/80 bg-white/90 p-3 shadow-xs dark:border-slate-800 dark:bg-slate-950/40">
+              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Günü Geçmiş Açık İşler</span>
+              <span className="font-mono text-base font-bold text-red-600 dark:text-red-400">
+                {scorecards.reduce((acc, s) => acc + s.overdueCount, 0)} Açık İş
+              </span>
+            </div>
+            <div className="rounded-lg border border-slate-200/80 bg-white/90 p-3 shadow-xs dark:border-slate-800 dark:bg-slate-950/40">
+              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Ort. CRM Sağlık Skoru</span>
+              <span className="font-mono text-base font-extrabold text-emerald-700 dark:text-emerald-400">
+                %{Math.round(scorecards.reduce((acc, s) => acc + s.crmHealthScore, 0) / (scorecards.length || 1))}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
         {isLoading ? (
           <div className="flex h-40 items-center justify-center">
@@ -865,6 +1006,12 @@ export default function ForecastInputPage() {
                   group.targetRevenue > 0 ? (group.revenue / group.targetRevenue) * 100 : 0;
                 const groupGPAchievement = group.targetGp > 0 ? (group.gp / group.targetGp) * 100 : 0;
                 const isCopyingThisManager = copyingManagerId === group.id;
+                const sc = scorecards.find(
+                  (s) =>
+                    s.managerName.toUpperCase() === group.managerName.toUpperCase() ||
+                    group.managerName.toUpperCase().includes(s.managerName.toUpperCase()) ||
+                    s.managerName.toUpperCase().includes(group.managerName.toUpperCase())
+                );
 
                 return (
                   <React.Fragment key={group.id}>
@@ -884,8 +1031,28 @@ export default function ForecastInputPage() {
                               <Users2 className="h-4 w-4" />
                             </span>
                             <span className="min-w-0">
-                              <span className="block truncate">{group.managerName}</span>
-                              <span className="block text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                              <span className="flex flex-wrap items-center gap-2">
+                                <span className="truncate font-bold text-slate-900 dark:text-slate-100">{group.managerName}</span>
+                                {sc && (
+                                  <Badge
+                                    variant="outline"
+                                    className={`text-[10px] py-0.5 px-2 font-bold flex items-center gap-1 shadow-xs ${
+                                      sc.crmHealthScore < 80
+                                        ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/80 dark:text-amber-300"
+                                        : "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300"
+                                    }`}
+                                  >
+                                    CRM Sağlık: %{sc.crmHealthScore}
+                                    {sc.overdueCount > 0 && <span className="text-red-600 font-extrabold dark:text-red-400">({sc.overdueCount} Günü Geçmiş)</span>}
+                                  </Badge>
+                                )}
+                                {sc && sc.weightedCrmPipeline > 0 && (
+                                  <Badge variant="outline" className="border-cyan-300 bg-cyan-50 text-cyan-900 text-[10px] font-mono font-bold dark:border-cyan-800 dark:bg-cyan-950/50 dark:text-cyan-300">
+                                    Ağırlıklı CRM: {formatUSD(sc.weightedCrmPipeline)}
+                                  </Badge>
+                                )}
+                              </span>
+                              <span className="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mt-0.5">
                                 {group.forecastedCount}/{group.rows.length} forecast, {group.targetedCount} hedef
                                 {group.backlogRiskCount > 0 ? `, ${group.backlogRiskCount} backlog uyarısı` : ""}
                               </span>
@@ -945,6 +1112,44 @@ export default function ForecastInputPage() {
                           <TableCell className={`pl-14 font-semibold ${row.isBelowBacklog ? "text-red-900 dark:text-red-200" : "text-slate-900 dark:text-slate-100"}`}>
                             <div className="flex flex-wrap items-center gap-2">
                               <span>{row.vendorName}</span>
+
+                              {/* Brand / Vendor level CRM Badges */}
+                              {(() => {
+                                const vSc = vendorScorecards.find(
+                                  (v) =>
+                                    v.vendorName.toUpperCase() === row.vendorName.toUpperCase() ||
+                                    v.vendorName.toUpperCase().includes(row.vendorName.toUpperCase()) ||
+                                    row.vendorName.toUpperCase().includes(v.vendorName.toUpperCase())
+                                );
+                                if (!vSc) return null;
+                                return (
+                                  <div className="inline-flex items-center gap-1.5">
+                                    <Badge
+                                      variant="outline"
+                                      className="text-[10px] py-0 px-1.5 font-bold bg-emerald-50 text-emerald-900 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800"
+                                      title={`Ağırlıklı CRM: ${formatUSD(vSc.weightedCrmPipeline)}`}
+                                    >
+                                      CRM: {formatUSD(vSc.weightedCrmPipeline)}
+                                    </Badge>
+                                    {vSc.overdueCount > 0 ? (
+                                      <Badge
+                                        variant="outline"
+                                        className="text-[10px] py-0 px-1.5 font-bold bg-red-50 text-red-800 border-red-300 dark:bg-red-950/60 dark:text-red-300"
+                                        title={`${vSc.overdueCount} Günü Geçmiş İş`}
+                                      >
+                                        Hijyen: %{vSc.crmHealthScore} ({vSc.overdueCount} Geçmiş)
+                                      </Badge>
+                                    ) : (
+                                      <Badge
+                                        variant="outline"
+                                        className="text-[10px] py-0 px-1.5 font-semibold bg-emerald-50/60 text-emerald-800 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-300"
+                                      >
+                                        Hijyen: %100
+                                      </Badge>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                               {row.hasForecast && row.weekNumber ? (
                                 <Badge variant="outline" className="text-[10px] py-0 px-1.5 font-semibold bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
                                   Hafta {row.weekNumber} Yüklemesi
@@ -1431,11 +1636,23 @@ export default function ForecastInputPage() {
         })()
       )}
 
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-3">
+        <Button
+          type="button"
+          onClick={() => {
+            setCrmWeekNumber(viewWeekNumber === "active" ? currentContext.weekInQuarter : viewWeekNumber);
+            setIsCrmUploadModalOpen(true);
+          }}
+          className="h-9 bg-[#1F3A2E] px-4 text-white hover:bg-[#2E5A43] shadow-sm"
+        >
+          <FileSpreadsheet className="h-4 w-4" />
+          CRM Excel Yükle (Scorecard)
+        </Button>
+
         <Button
           type="button"
           onClick={handleOpenBulkModal}
-          className="h-9 bg-[#2E5A43] px-4 text-white hover:bg-[#1F3A2E]"
+          className="h-9 bg-[#2E5A43] px-4 text-white hover:bg-[#1F3A2E] shadow-sm"
         >
           <Upload className="h-4 w-4" />
           XLS ile Bulk Yükle
@@ -1768,6 +1985,126 @@ export default function ForecastInputPage() {
             <Button type="button" variant="outline" onClick={() => setIsHistoryOpen(false)}>
               Kapat
               <ChevronRight className="h-4 w-4" />
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* CRM Excel Upload Modal */}
+      <Dialog open={isCrmUploadModalOpen} onOpenChange={setIsCrmUploadModalOpen}>
+        <DialogContent className="sm:max-w-md border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-serif text-xl font-bold text-[#1F3A2E] dark:text-emerald-400">
+              <FileSpreadsheet className="h-5 w-5 text-emerald-700 dark:text-emerald-400" />
+              CRM Excel Yükleme (Scorecard)
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Haftalık CRM Fırsat raporunu (CS1_TDSYNNEX...xlsx) yükleyerek Ağırlıklı CRM Pipeline ve CRM Hijyen Puanlarını güncelleyin.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleCrmUploadSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">Hedef Hafta</Label>
+              <Select value={crmWeekNumber.toString()} onValueChange={(val) => val && setCrmWeekNumber(parseInt(val, 10))}>
+                <SelectTrigger className="h-9 text-xs border-slate-200">
+                  <SelectValue placeholder="Hafta seçin" />
+                </SelectTrigger>
+                <SelectContent className="bg-white border-slate-200">
+                  {Array.from({ length: 13 }, (_, i) => i + 1).map((w) => (
+                    <SelectItem key={w} value={w.toString()} className="text-xs">
+                      {w}. Hafta Kaydı Olarak Yükle
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">CRM Excel Dosyası (CS1_TDSYNNEX...xlsx)</Label>
+              <Input
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={(e) => setCrmFile(e.target.files?.[0] ?? null)}
+                className="text-xs border-slate-200"
+              />
+            </div>
+
+            <DialogFooter className="pt-2">
+              <Button type="button" variant="outline" onClick={() => setIsCrmUploadModalOpen(false)} disabled={isCrmSubmitting}>
+                İptal
+              </Button>
+              <Button type="submit" disabled={isCrmSubmitting || !crmFile} className="bg-[#1F3A2E] text-white hover:bg-[#2E5A43]">
+                {isCrmSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                CRM Dosyasını İşle
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Full Scorecard Leaderboard Modal */}
+      <Dialog open={isScorecardLeaderboardOpen} onOpenChange={setIsScorecardLeaderboardOpen}>
+        <DialogContent className="sm:max-w-4xl border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-serif text-xl font-bold text-[#1F3A2E] dark:text-emerald-400">
+              <Users2 className="h-5 w-5 text-emerald-700 dark:text-emerald-400" />
+              Satış Müdürü Karneleri ({scorecards.length} Kişi)
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              {viewWeekNumber === "active" ? currentContext.weekInQuarter : viewWeekNumber}. Hafta CS1_TDSYNNEX CRM Excel yüklemesine göre tüm Satış Müdürlerinin Ağırlıklı CRM Pipeline ve CRM Hijyen Puanı sıralaması.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="max-h-[460px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-800">
+            <Table>
+              <TableHeader className="bg-slate-50 dark:bg-slate-800/50 sticky top-0 z-10">
+                <TableRow>
+                  <TableHead className="w-12 text-center font-bold">#</TableHead>
+                  <TableHead>Satış Müdürü</TableHead>
+                  <TableHead className="text-right">Ağırlıklı CRM ($)</TableHead>
+                  <TableHead className="text-right">Ham Pipeline ($)</TableHead>
+                  <TableHead className="text-center">Günü Geçmiş</TableHead>
+                  <TableHead className="text-right">CRM Sağlık Skoru</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {scorecards
+                  .slice()
+                  .sort((a, b) => b.weightedCrmPipeline - a.weightedCrmPipeline)
+                  .map((sc, idx) => (
+                    <TableRow key={sc.id || sc.managerName} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                      <TableCell className="text-center font-mono font-bold text-xs text-slate-400">{idx + 1}</TableCell>
+                      <TableCell className="font-bold text-slate-900 dark:text-slate-100">{sc.managerName}</TableCell>
+                      <TableCell className="text-right font-mono font-bold text-emerald-800 dark:text-emerald-300">
+                        {formatUSD(sc.weightedCrmPipeline)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs text-slate-600 dark:text-slate-400">
+                        {formatUSD(sc.rawCrmPipeline)}
+                      </TableCell>
+                      <TableCell className="text-center font-mono text-xs">
+                        {sc.overdueCount > 0 ? (
+                          <Badge variant="outline" className="border-red-300 bg-red-50 text-red-800 font-bold dark:border-red-800 dark:bg-red-950/60 dark:text-red-300">
+                            {sc.overdueCount} İş
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-800 text-[10px]">Temiz</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right font-mono font-bold text-sm">
+                        <span className={sc.crmHealthScore < 80 ? "text-amber-700 dark:text-amber-400" : "text-emerald-700 dark:text-emerald-400"}>
+                          %{sc.crmHealthScore}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setIsScorecardLeaderboardOpen(false)}>
+              Kapat
             </Button>
           </DialogFooter>
         </DialogContent>
