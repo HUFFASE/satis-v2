@@ -26,6 +26,7 @@ import {
   ChevronLeft,
   ChevronRight,
   TrendingDown,
+  FileSpreadsheet,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -80,6 +81,7 @@ export default function Sidebar({ user, isCollapsed, setIsCollapsed }: SidebarPr
     {
       title: "ANALİZ",
       items: [
+        { name: "Scorecard & CRM", href: "/scorecard", icon: FileSpreadsheet },
         { name: "Raporlama", href: "/reports", icon: BarChart3 },
       ],
     },

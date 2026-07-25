@@ -14,7 +14,12 @@ declare const globalThis: {
   prismaGlobal: ReturnType<typeof prismaClientSingleton> | undefined;
 } & typeof global;
 
-const prisma = globalThis.prismaGlobal ?? prismaClientSingleton();
+let prisma = globalThis.prismaGlobal ?? prismaClientSingleton();
+
+// Ensure hot-reloaded dev client includes all generated model delegates
+if (prisma && !("salesManagerScorecard" in prisma)) {
+  prisma = prismaClientSingleton();
+}
 
 export default prisma;
 

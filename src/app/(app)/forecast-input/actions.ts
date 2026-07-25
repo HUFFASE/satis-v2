@@ -9,6 +9,7 @@ import { getFiscalContext } from "@/lib/fiscal";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import * as XLSX from "xlsx";
+import { parseTDSynnexCrmExcel } from "@/lib/crm/tdsynnex-parser";
 
 const submitForecastSchema = z.object({
   revenue: z.number().min(0, "Revenue değeri sıfırdan küçük olamaz."),
@@ -920,5 +921,243 @@ export async function getWeeklyForecastTrend(fiscalYear: number, quarter: number
     revenue: data.revenue,
     gp: data.gp,
     count: data.count,
+  }));
+}
+
+export async function uploadCrmExcelAction(formData: FormData, fiscalYear: number, quarter: number, weekNumber: number) {
+  const session = await auth();
+  if (!session?.user) {
+    return { success: false, error: "Oturum açık değil." };
+  }
+
+  const file = formData.get("file") as File | null;
+  if (!file) {
+    return { success: false, error: "Lütfen geçerli bir CRM Excel dosyası seçin." };
+  }
+
+  try {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const parsed = parseTDSynnexCrmExcel(buffer);
+    const period = await ensureFiscalPeriod(fiscalYear, quarter);
+
+    const brandSummaries = Object.values(parsed.brandSummaries);
+
+    // 1. Fetch DB Vendors with their assigned Sales Managers (User) and Aliases
+    const dbVendors = await prisma.vendor.findMany({
+      include: {
+        manager: { select: { id: true, name: true } },
+        aliases: { select: { alias: true } },
+      },
+    });
+
+    // Manager CRM aggregation map: managerName -> aggregated metrics
+    const managerCrmMap: Record<
+      string,
+      {
+        managerName: string;
+        userId: string | null;
+        weightedPipeline: number;
+        rawPipeline: number;
+        overdueCount: number;
+      }
+    > = {};
+
+    // Also fetch all system users with role 'MANAGER' or vendors' assigned managers to ensure all SMs are included
+    const allDbManagers = await prisma.user.findMany({
+      where: { role: { in: ["SATIS_MUDURU", "DIREKTOR"] } },
+      select: { id: true, name: true },
+    });
+
+    for (const m of allDbManagers) {
+      managerCrmMap[m.name] = {
+        managerName: m.name,
+        userId: m.id,
+        weightedPipeline: 0,
+        rawPipeline: 0,
+        overdueCount: 0,
+      };
+    }
+
+    // 2. Process each Brand Summary from Excel & match to DB Vendor & Sales Manager
+    for (const b of brandSummaries) {
+      const bNameUpper = b.brandName.toUpperCase();
+      const matchedVendor = dbVendors.find(
+        (v) =>
+          v.name.toUpperCase() === bNameUpper ||
+          v.code?.toUpperCase() === bNameUpper ||
+          v.aliases.some((a) => a.alias.toUpperCase() === bNameUpper) ||
+          v.name.toUpperCase().includes(bNameUpper) ||
+          bNameUpper.includes(v.name.toUpperCase())
+      );
+
+      // Upsert VendorScorecard
+      await prisma.vendorScorecard.upsert({
+        where: {
+          vendorName_fiscalPeriodId_weekNumber: {
+            vendorName: b.brandName,
+            fiscalPeriodId: period.id,
+            weekNumber,
+          },
+        },
+        create: {
+          vendorName: b.brandName,
+          vendorId: matchedVendor?.id ?? null,
+          fiscalPeriodId: period.id,
+          weekNumber,
+          weightedCrmPipeline: b.weightedPipeline,
+          rawCrmPipeline: b.rawPipeline,
+          overdueCount: b.overdueCount,
+          crmHealthScore: b.crmHealthScore,
+          totalDeals: b.totalDeals,
+        },
+        update: {
+          vendorId: matchedVendor?.id ?? null,
+          weightedCrmPipeline: b.weightedPipeline,
+          rawCrmPipeline: b.rawPipeline,
+          overdueCount: b.overdueCount,
+          crmHealthScore: b.crmHealthScore,
+          totalDeals: b.totalDeals,
+        },
+      });
+
+      // Aggregate for Assigned Sales Manager (SM) from System DB
+      if (matchedVendor?.manager?.name) {
+        const smName = matchedVendor.manager.name;
+        if (!managerCrmMap[smName]) {
+          managerCrmMap[smName] = {
+            managerName: smName,
+            userId: matchedVendor.manager.id,
+            weightedPipeline: 0,
+            rawPipeline: 0,
+            overdueCount: 0,
+          };
+        }
+        managerCrmMap[smName].weightedPipeline += b.weightedPipeline;
+        managerCrmMap[smName].rawPipeline += b.rawPipeline;
+        managerCrmMap[smName].overdueCount += b.overdueCount;
+      }
+    }
+
+    // 3. Upsert SalesManagerScorecard for each system Sales Manager
+    for (const sm of Object.values(managerCrmMap)) {
+      const crmHealthScore = Math.max(30, 100 - sm.overdueCount * 5);
+      const overall = Math.round((crmHealthScore * 0.4 + 60) * 100) / 100;
+
+      await prisma.salesManagerScorecard.upsert({
+        where: {
+          managerName_fiscalPeriodId_weekNumber: {
+            managerName: sm.managerName,
+            fiscalPeriodId: period.id,
+            weekNumber,
+          },
+        },
+        create: {
+          managerName: sm.managerName,
+          userId: sm.userId,
+          fiscalPeriodId: period.id,
+          weekNumber,
+          weightedCrmPipeline: sm.weightedPipeline,
+          rawCrmPipeline: sm.rawPipeline,
+          overdueCount: sm.overdueCount,
+          crmHealthScore,
+          overallScore: overall,
+        },
+        update: {
+          userId: sm.userId,
+          weightedCrmPipeline: sm.weightedPipeline,
+          rawCrmPipeline: sm.rawPipeline,
+          overdueCount: sm.overdueCount,
+          crmHealthScore,
+          overallScore: overall,
+        },
+      });
+    }
+
+    await prisma.importLog.create({
+      data: {
+        dataType: "CRM",
+        uploadedById: session.user.id,
+        fileName: file.name,
+        rowCount: parsed.rows.length,
+        status: "SUCCESS",
+      },
+    });
+
+    revalidatePath("/forecast-input");
+    revalidatePath("/scorecard");
+
+    return {
+      success: true,
+      processedCount: parsed.rows.length,
+      brandCount: brandSummaries.length,
+      managerCount: Object.keys(managerCrmMap).length,
+    };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "CRM Excel yüklenirken hata oluştu.") };
+  }
+}
+
+export async function getManagerScorecardsAction(fiscalYear: number, quarter: number, weekNumber: number) {
+  const session = await auth();
+  if (!session?.user) {
+    throw new Error("Oturum açık değil.");
+  }
+
+  const period = await ensureFiscalPeriod(fiscalYear, quarter);
+
+  if (!prisma.salesManagerScorecard) {
+    return [];
+  }
+
+  const scorecards = await prisma.salesManagerScorecard.findMany({
+    where: {
+      fiscalPeriodId: period.id,
+      weekNumber,
+    },
+  });
+
+  return scorecards.map((s) => ({
+    id: s.id,
+    managerName: s.managerName,
+    weightedCrmPipeline: Number(s.weightedCrmPipeline),
+    rawCrmPipeline: Number(s.rawCrmPipeline),
+    overdueCount: s.overdueCount,
+    crmHealthScore: s.crmHealthScore,
+    forecastAccuracy: Number(s.forecastAccuracy),
+    revenueAch: Number(s.revenueAch),
+    gpAch: Number(s.gpAch),
+    overallScore: Number(s.overallScore),
+    managerComment: s.managerComment,
+  }));
+}
+
+export async function getVendorScorecardsAction(fiscalYear: number, quarter: number, weekNumber: number) {
+  const session = await auth();
+  if (!session?.user) {
+    throw new Error("Oturum açık değil.");
+  }
+
+  const period = await ensureFiscalPeriod(fiscalYear, quarter);
+
+  if (!prisma.vendorScorecard) {
+    return [];
+  }
+
+  const scorecards = await prisma.vendorScorecard.findMany({
+    where: {
+      fiscalPeriodId: period.id,
+      weekNumber,
+    },
+  });
+
+  return scorecards.map((v) => ({
+    id: v.id,
+    vendorName: v.vendorName,
+    vendorId: v.vendorId,
+    weightedCrmPipeline: Number(v.weightedCrmPipeline),
+    rawCrmPipeline: Number(v.rawCrmPipeline),
+    overdueCount: v.overdueCount,
+    crmHealthScore: v.crmHealthScore,
+    totalDeals: v.totalDeals,
   }));
 }

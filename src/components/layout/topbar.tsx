@@ -63,6 +63,8 @@ export default function Topbar({ user }: TopbarProps) {
         return "Kapanış";
       case "/reports":
         return "Raporlama & Analiz";
+      case "/scorecard":
+        return "Satış Müdürü Karneleri & CRM Analizi";
       case "/admin/users":
         return "Kullanıcı Yönetimi";
       case "/admin/vendors":

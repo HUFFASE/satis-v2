@@ -19,6 +19,8 @@ enum ImportDataType {
   TARGET
   ACTUAL
   CLOSING
+  CRM
+  VISITS
 }
 
 enum ImportStatus {
@@ -43,6 +45,7 @@ model User {
   forecasts      Forecast[]
   importLogs     ImportLog[]
   auditLogs      AuditLog[]
+  scorecards     SalesManagerScorecard[]
 }
 
 model Vendor {
@@ -61,7 +64,8 @@ model Vendor {
   forecasts Forecast[]
   targets   Target[]
   actuals   Actual[]
-  closings  Closing[]
+  closings           Closing[]
+  vendorScorecards   VendorScorecard[]
 
   @@index([managerId])
 }
@@ -94,18 +98,20 @@ model VendorAlias {
 }
 
 model FiscalPeriod {
-  id         String   @id @default(uuid())
-  fiscalYear Int
-  quarter    Int
-  startDate  DateTime
-  endDate    DateTime
-  isLocked   Boolean  @default(false)
-  createdAt  DateTime @default(now())
+  id               String   @id @default(uuid())
+  fiscalYear       Int
+  quarter          Int
+  startDate        DateTime
+  endDate          DateTime
+  isLocked         Boolean  @default(false)
+  createdAt        DateTime @default(now())
 
-  forecasts Forecast[]
-  targets   Target[]
-  actuals   Actual[]
-  closings  Closing[]
+  forecasts        Forecast[]
+  targets          Target[]
+  actuals          Actual[]
+  closings         Closing[]
+  scorecards       SalesManagerScorecard[]
+  vendorScorecards VendorScorecard[]
 
   @@unique([fiscalYear, quarter])
 }
@@ -179,6 +185,54 @@ model Closing {
 
   @@unique([vendorId, fiscalPeriodId])
   @@index([fiscalPeriodId])
+}
+
+model SalesManagerScorecard {
+  id                  String   @id @default(uuid())
+  managerName         String
+  userId              String?
+  fiscalPeriodId      String
+  weekNumber          Int
+  forecastAccuracy    Decimal  @default(100.00) @db.Decimal(5, 2)
+  revenueAch          Decimal  @default(0.00) @db.Decimal(5, 2)
+  gpAch               Decimal  @default(0.00) @db.Decimal(5, 2)
+  weightedCrmPipeline Decimal  @default(0.00) @db.Decimal(18, 2)
+  rawCrmPipeline      Decimal  @default(0.00) @db.Decimal(18, 2)
+  overdueCount        Int      @default(0)
+  crmHealthScore      Int      @default(100)
+  actualVisits        Int      @default(0)
+  targetVisits        Int      @default(0)
+  overallScore        Decimal  @default(100.00) @db.Decimal(5, 2)
+  managerComment      String?  @db.Text
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  fiscalPeriod FiscalPeriod @relation(fields: [fiscalPeriodId], references: [id], onDelete: Cascade)
+
+  @@unique([managerName, fiscalPeriodId, weekNumber])
+  @@index([fiscalPeriodId, weekNumber])
+}
+
+model VendorScorecard {
+  id                  String   @id @default(uuid())
+  vendorName          String
+  vendorId            String?
+  fiscalPeriodId      String
+  weekNumber          Int
+  weightedCrmPipeline Decimal  @default(0.00) @db.Decimal(18, 2)
+  rawCrmPipeline      Decimal  @default(0.00) @db.Decimal(18, 2)
+  overdueCount        Int      @default(0)
+  crmHealthScore      Int      @default(100)
+  totalDeals          Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  vendor       Vendor?      @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  fiscalPeriod FiscalPeriod @relation(fields: [fiscalPeriodId], references: [id], onDelete: Cascade)
+
+  @@unique([vendorName, fiscalPeriodId, weekNumber])
+  @@index([fiscalPeriodId, weekNumber])
 }
 
 model ImportLog {
