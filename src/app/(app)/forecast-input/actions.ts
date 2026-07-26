@@ -924,7 +924,14 @@ export async function getWeeklyForecastTrend(fiscalYear: number, quarter: number
   }));
 }
 
-export async function uploadCrmExcelAction(formData: FormData, fiscalYear: number, quarter: number, weekNumber: number) {
+export async function uploadCrmExcelAction(
+  formData: FormData,
+  fiscalYear: number,
+  quarter: number,
+  weekNumber: number,
+  mappingsJson?: string,
+  skipMappingCheck: boolean = false
+) {
   const session = await auth();
   if (!session?.user) {
     return { success: false, error: "Oturum açık değil." };
@@ -937,48 +944,112 @@ export async function uploadCrmExcelAction(formData: FormData, fiscalYear: numbe
 
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
-    const parsed = parseTDSynnexCrmExcel(buffer);
+    const parsed = parseTDSynnexCrmExcel(buffer, fiscalYear, quarter);
     const period = await ensureFiscalPeriod(fiscalYear, quarter);
+
+    // Save mappings if provided
+    if (mappingsJson) {
+      try {
+        const mappings: { excelBrand: string; targetVendorId: string }[] = JSON.parse(mappingsJson);
+        for (const m of mappings) {
+          if (m.excelBrand && m.targetVendorId) {
+            await prisma.vendorAlias.upsert({
+              where: { alias: m.excelBrand.toUpperCase() },
+              create: { alias: m.excelBrand.toUpperCase(), vendorId: m.targetVendorId },
+              update: { vendorId: m.targetVendorId },
+            });
+          }
+        }
+      } catch (e) {
+        console.error("Error parsing or saving brand mappings:", e);
+      }
+    }
 
     const brandSummaries = Object.values(parsed.brandSummaries);
 
-    // 1. Fetch DB Vendors with their assigned Sales Managers (User) and Aliases
-    const dbVendors = await prisma.vendor.findMany({
+    // 1. Fetch DB Vendors with their assigned Sales Managers (User with role SATIS_MUDURU) and Aliases
+    let dbVendors = await prisma.vendor.findMany({
       include: {
-        manager: { select: { id: true, name: true } },
+        manager: { select: { id: true, name: true, role: true } },
         aliases: { select: { alias: true } },
       },
     });
 
-    // Manager CRM aggregation map: managerName -> aggregated metrics
+    // Check for unmatched brands if skipMappingCheck is false and no mappings were provided
+    if (!skipMappingCheck && !mappingsJson) {
+      const unmatchedBrands: { brandName: string; totalDeals: number; rawPipeline: number }[] = [];
+      for (const b of brandSummaries) {
+        const bNameUpper = b.brandName.toUpperCase();
+        const matchedVendor = dbVendors.find(
+          (v) =>
+            v.name.toUpperCase() === bNameUpper ||
+            v.code?.toUpperCase() === bNameUpper ||
+            v.aliases.some((a) => a.alias.toUpperCase() === bNameUpper) ||
+            v.name.toUpperCase().includes(bNameUpper) ||
+            bNameUpper.includes(v.name.toUpperCase())
+        );
+
+        if (!matchedVendor || !matchedVendor.manager || matchedVendor.manager.role !== "SATIS_MUDURU") {
+          unmatchedBrands.push({
+            brandName: b.brandName,
+            totalDeals: b.totalDeals,
+            rawPipeline: b.rawPipeline,
+          });
+        }
+      }
+
+      if (unmatchedBrands.length > 0) {
+        return {
+          requiresMapping: true,
+          unmatchedBrands,
+          availableVendors: dbVendors.map((v) => ({
+            id: v.id,
+            name: v.name,
+            code: v.code,
+            managerName: v.manager?.name || "Atanmamış",
+            managerRole: v.manager?.role || null,
+          })),
+        };
+      }
+    }
+
+    // Manager CRM aggregation map: managerId -> aggregated metrics
     const managerCrmMap: Record<
       string,
       {
         managerName: string;
-        userId: string | null;
+        userId: string;
         weightedPipeline: number;
         rawPipeline: number;
+        tryWeightedPipeline: number;
+        tryRawPipeline: number;
+        tryDealCount: number;
         overdueCount: number;
+        auditDeals: any[];
       }
     > = {};
 
-    // Also fetch all system users with role 'MANAGER' or vendors' assigned managers to ensure all SMs are included
+    // Fetch ONLY system users with role 'SATIS_MUDURU' (Account managers are ignored)
     const allDbManagers = await prisma.user.findMany({
-      where: { role: { in: ["SATIS_MUDURU", "DIREKTOR"] } },
+      where: { role: "SATIS_MUDURU" },
       select: { id: true, name: true },
     });
 
     for (const m of allDbManagers) {
-      managerCrmMap[m.name] = {
+      managerCrmMap[m.id] = {
         managerName: m.name,
         userId: m.id,
         weightedPipeline: 0,
         rawPipeline: 0,
+        tryWeightedPipeline: 0,
+        tryRawPipeline: 0,
+        tryDealCount: 0,
         overdueCount: 0,
+        auditDeals: [] as any[],
       };
     }
 
-    // 2. Process each Brand Summary from Excel & match to DB Vendor & Sales Manager
+    // 2. Process each Brand Summary from Excel & match to DB Vendor & Sales Manager (SATIS_MUDURU)
     for (const b of brandSummaries) {
       const bNameUpper = b.brandName.toUpperCase();
       const matchedVendor = dbVendors.find(
@@ -989,6 +1060,16 @@ export async function uploadCrmExcelAction(formData: FormData, fiscalYear: numbe
           v.name.toUpperCase().includes(bNameUpper) ||
           bNameUpper.includes(v.name.toUpperCase())
       );
+
+      const isUnassigned = !matchedVendor || !matchedVendor.manager || matchedVendor.manager.role !== "SATIS_MUDURU";
+      const bAuditDeals = b.auditDeals || [];
+      if (isUnassigned) {
+        bAuditDeals.forEach(d => {
+          if (!d.issues.includes("UNASSIGNED_BRAND")) {
+            d.issues.push("UNASSIGNED_BRAND");
+          }
+        });
+      }
 
       // Upsert VendorScorecard
       await prisma.vendorScorecard.upsert({
@@ -1006,41 +1087,73 @@ export async function uploadCrmExcelAction(formData: FormData, fiscalYear: numbe
           weekNumber,
           weightedCrmPipeline: b.weightedPipeline,
           rawCrmPipeline: b.rawPipeline,
+          tryWeightedPipeline: b.tryWeightedPipeline,
+          tryRawPipeline: b.tryRawPipeline,
+          tryDealCount: b.tryTotalDeals,
           overdueCount: b.overdueCount,
           crmHealthScore: b.crmHealthScore,
           totalDeals: b.totalDeals,
+          crmAuditJson: JSON.stringify(bAuditDeals),
         },
         update: {
           vendorId: matchedVendor?.id ?? null,
           weightedCrmPipeline: b.weightedPipeline,
           rawCrmPipeline: b.rawPipeline,
+          tryWeightedPipeline: b.tryWeightedPipeline,
+          tryRawPipeline: b.tryRawPipeline,
+          tryDealCount: b.tryTotalDeals,
           overdueCount: b.overdueCount,
           crmHealthScore: b.crmHealthScore,
           totalDeals: b.totalDeals,
+          crmAuditJson: JSON.stringify(bAuditDeals),
         },
       });
 
-      // Aggregate for Assigned Sales Manager (SM) from System DB
-      if (matchedVendor?.manager?.name) {
-        const smName = matchedVendor.manager.name;
-        if (!managerCrmMap[smName]) {
-          managerCrmMap[smName] = {
-            managerName: smName,
-            userId: matchedVendor.manager.id,
+      // Aggregate for Assigned Sales Manager (SATIS_MUDURU) from System DB
+      if (matchedVendor?.manager && matchedVendor.manager.role === "SATIS_MUDURU") {
+        const smId = matchedVendor.manager.id;
+        if (!managerCrmMap[smId]) {
+          managerCrmMap[smId] = {
+            managerName: matchedVendor.manager.name,
+            userId: smId,
             weightedPipeline: 0,
             rawPipeline: 0,
+            tryWeightedPipeline: 0,
+            tryRawPipeline: 0,
+            tryDealCount: 0,
             overdueCount: 0,
+            auditDeals: [],
           };
         }
-        managerCrmMap[smName].weightedPipeline += b.weightedPipeline;
-        managerCrmMap[smName].rawPipeline += b.rawPipeline;
-        managerCrmMap[smName].overdueCount += b.overdueCount;
+        managerCrmMap[smId].weightedPipeline += b.weightedPipeline;
+        managerCrmMap[smId].rawPipeline += b.rawPipeline;
+        managerCrmMap[smId].tryWeightedPipeline += b.tryWeightedPipeline;
+        managerCrmMap[smId].tryRawPipeline += b.tryRawPipeline;
+        managerCrmMap[smId].tryDealCount += b.tryTotalDeals;
+        managerCrmMap[smId].overdueCount += b.overdueCount;
+        const mappedDeals = bAuditDeals.map(d => ({ ...d, salesManager: matchedVendor.manager?.name || "" }));
+        managerCrmMap[smId].auditDeals.push(...mappedDeals);
       }
     }
 
-    // 3. Upsert SalesManagerScorecard for each system Sales Manager
+    // Clean up any outdated/account manager scorecards for this period & week
+    const validManagerIds = allDbManagers.map((m) => m.id);
+    await prisma.salesManagerScorecard.deleteMany({
+      where: {
+        fiscalPeriodId: period.id,
+        weekNumber,
+        OR: [
+          { userId: { notIn: validManagerIds } },
+          { userId: null },
+        ],
+      },
+    });
+
+    // 3. Upsert SalesManagerScorecard for each system Sales Manager (SATIS_MUDURU)
     for (const sm of Object.values(managerCrmMap)) {
-      const crmHealthScore = Math.max(30, 100 - sm.overdueCount * 5);
+      const smTotalDeals = (sm as any).totalDeals || sm.auditDeals.length;
+      const smIssueCount = sm.auditDeals.filter((d: any) => d.issues && d.issues.length > 0).length;
+      const crmHealthScore = smTotalDeals === 0 ? 100 : Math.max(0, Math.round(((smTotalDeals - smIssueCount) / smTotalDeals) * 100));
       const overall = Math.round((crmHealthScore * 0.4 + 60) * 100) / 100;
 
       await prisma.salesManagerScorecard.upsert({
@@ -1058,17 +1171,25 @@ export async function uploadCrmExcelAction(formData: FormData, fiscalYear: numbe
           weekNumber,
           weightedCrmPipeline: sm.weightedPipeline,
           rawCrmPipeline: sm.rawPipeline,
+          tryWeightedPipeline: sm.tryWeightedPipeline,
+          tryRawPipeline: sm.tryRawPipeline,
+          tryDealCount: sm.tryDealCount,
           overdueCount: sm.overdueCount,
           crmHealthScore,
           overallScore: overall,
+          crmAuditJson: JSON.stringify(sm.auditDeals || []),
         },
         update: {
           userId: sm.userId,
           weightedCrmPipeline: sm.weightedPipeline,
           rawCrmPipeline: sm.rawPipeline,
+          tryWeightedPipeline: sm.tryWeightedPipeline,
+          tryRawPipeline: sm.tryRawPipeline,
+          tryDealCount: sm.tryDealCount,
           overdueCount: sm.overdueCount,
           crmHealthScore,
           overallScore: overall,
+          crmAuditJson: JSON.stringify(sm.auditDeals || []),
         },
       });
     }
@@ -1091,6 +1212,7 @@ export async function uploadCrmExcelAction(formData: FormData, fiscalYear: numbe
       processedCount: parsed.rows.length,
       brandCount: brandSummaries.length,
       managerCount: Object.keys(managerCrmMap).length,
+      trySummary: parsed.trySummary,
     };
   } catch (err: unknown) {
     return { success: false, error: getErrorMessage(err, "CRM Excel yüklenirken hata oluştu.") };
@@ -1113,6 +1235,9 @@ export async function getManagerScorecardsAction(fiscalYear: number, quarter: nu
     where: {
       fiscalPeriodId: period.id,
       weekNumber,
+      user: {
+        role: "SATIS_MUDURU",
+      },
     },
   });
 
@@ -1121,6 +1246,9 @@ export async function getManagerScorecardsAction(fiscalYear: number, quarter: nu
     managerName: s.managerName,
     weightedCrmPipeline: Number(s.weightedCrmPipeline),
     rawCrmPipeline: Number(s.rawCrmPipeline),
+    tryWeightedPipeline: Number(s.tryWeightedPipeline ?? 0),
+    tryRawPipeline: Number(s.tryRawPipeline ?? 0),
+    tryDealCount: s.tryDealCount ?? 0,
     overdueCount: s.overdueCount,
     crmHealthScore: s.crmHealthScore,
     forecastAccuracy: Number(s.forecastAccuracy),
@@ -1128,6 +1256,7 @@ export async function getManagerScorecardsAction(fiscalYear: number, quarter: nu
     gpAch: Number(s.gpAch),
     overallScore: Number(s.overallScore),
     managerComment: s.managerComment,
+    crmAuditJson: s.crmAuditJson,
   }));
 }
 
@@ -1156,8 +1285,12 @@ export async function getVendorScorecardsAction(fiscalYear: number, quarter: num
     vendorId: v.vendorId,
     weightedCrmPipeline: Number(v.weightedCrmPipeline),
     rawCrmPipeline: Number(v.rawCrmPipeline),
+    tryWeightedPipeline: Number(v.tryWeightedPipeline ?? 0),
+    tryRawPipeline: Number(v.tryRawPipeline ?? 0),
+    tryDealCount: v.tryDealCount ?? 0,
     overdueCount: v.overdueCount,
     crmHealthScore: v.crmHealthScore,
     totalDeals: v.totalDeals,
+    crmAuditJson: v.crmAuditJson,
   }));
 }

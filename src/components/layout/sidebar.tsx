@@ -82,7 +82,8 @@ export default function Sidebar({ user, isCollapsed, setIsCollapsed }: SidebarPr
       title: "ANALİZ",
       items: [
         { name: "Scorecard & CRM", href: "/scorecard", icon: FileSpreadsheet },
-        { name: "Raporlama", href: "/reports", icon: BarChart3 },
+        { name: "CRM Analizi & Datası", href: "/crm-analytics", icon: BarChart3 },
+        { name: "Raporlama", href: "/reports", icon: TrendingUp },
       ],
     },
     {
