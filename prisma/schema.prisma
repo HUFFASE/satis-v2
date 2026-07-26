@@ -198,12 +198,16 @@ model SalesManagerScorecard {
   gpAch               Decimal  @default(0.00) @db.Decimal(5, 2)
   weightedCrmPipeline Decimal  @default(0.00) @db.Decimal(18, 2)
   rawCrmPipeline      Decimal  @default(0.00) @db.Decimal(18, 2)
+  tryWeightedPipeline Decimal  @default(0.00) @db.Decimal(18, 2)
+  tryRawPipeline      Decimal  @default(0.00) @db.Decimal(18, 2)
+  tryDealCount        Int      @default(0)
   overdueCount        Int      @default(0)
   crmHealthScore      Int      @default(100)
   actualVisits        Int      @default(0)
   targetVisits        Int      @default(0)
   overallScore        Decimal  @default(100.00) @db.Decimal(5, 2)
   managerComment      String?  @db.Text
+  crmAuditJson        String?  @db.Text
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -222,9 +226,13 @@ model VendorScorecard {
   weekNumber          Int
   weightedCrmPipeline Decimal  @default(0.00) @db.Decimal(18, 2)
   rawCrmPipeline      Decimal  @default(0.00) @db.Decimal(18, 2)
+  tryWeightedPipeline Decimal  @default(0.00) @db.Decimal(18, 2)
+  tryRawPipeline      Decimal  @default(0.00) @db.Decimal(18, 2)
+  tryDealCount        Int      @default(0)
   overdueCount        Int      @default(0)
   crmHealthScore      Int      @default(100)
   totalDeals          Int      @default(0)
+  crmAuditJson        String?  @db.Text
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 

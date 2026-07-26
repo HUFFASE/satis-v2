@@ -1284,8 +1284,8 @@ export default function ForecastInputPage() {
         </div>
       ) : (
         (() => {
-          const maxRev = Math.max(1, ...weeklyTrend.map((w) => w.revenue));
-          const maxGp = Math.max(1, ...weeklyTrend.map((w) => w.gp));
+          const maxRev = Math.max(1, totalTargetRevenue > 0 ? totalTargetRevenue * 1.05 : 0, ...weeklyTrend.map((w) => w.revenue));
+          const maxGp = Math.max(1, totalTargetGP > 0 ? totalTargetGP * 1.05 : 0, ...weeklyTrend.map((w) => w.gp));
           const maxGpPercent = Math.max(10, ...weeklyTrend.map((w) => (w.revenue > 0 ? (w.gp / w.revenue) * 100 : 0)));
           const maxGpPercentScaled = Math.min(100, Math.ceil(maxGpPercent / 10) * 10 || 50);
 
@@ -1299,6 +1299,8 @@ export default function ForecastInputPage() {
           const revChartW = width - revPadLeft - revPadRight;
           const revChartH = height - paddingY * 2;
 
+          const targetRevY = totalTargetRevenue > 0 ? height - paddingY - (totalTargetRevenue / maxRev) * revChartH : null;
+
           const pointsRev = weeklyTrend.map((item, idx) => {
             const x = revPadLeft + (idx / (weeklyTrend.length - 1)) * revChartW;
             const y = height - paddingY - (item.revenue / maxRev) * revChartH;
@@ -1310,6 +1312,8 @@ export default function ForecastInputPage() {
           const gpPadRight = 45;
           const gpChartW = width - gpPadLeft - gpPadRight;
           const gpChartH = height - paddingY * 2;
+
+          const targetGpY = totalTargetGP > 0 ? height - paddingY - (totalTargetGP / maxGp) * gpChartH : null;
 
           const pointsGp = weeklyTrend.map((item, idx) => {
             const x = gpPadLeft + (idx / (weeklyTrend.length - 1)) * gpChartW;
@@ -1372,9 +1376,17 @@ export default function ForecastInputPage() {
                       FY{fiscalYear} Q{quarter} 1-13. haftalık ciro akışı.
                     </p>
                   </div>
-                  <div className="flex items-center gap-1.5 text-xs font-semibold font-sans">
-                    <span className="h-3 w-3 rounded-xs bg-[#2E5A43]" />
-                    <span className="text-slate-700 dark:text-slate-300">Revenue</span>
+                  <div className="flex items-center gap-3 text-xs font-semibold font-sans">
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-3 w-3 rounded-xs bg-[#2E5A43]" />
+                      <span className="text-slate-700 dark:text-slate-300">Revenue</span>
+                    </div>
+                    {totalTargetRevenue > 0 && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="h-0.5 w-3.5 bg-red-500 border-b border-dashed border-red-500" />
+                        <span className="text-red-600 dark:text-red-400 font-bold">Hedef Ciro</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1413,6 +1425,38 @@ export default function ForecastInputPage() {
 
                     <path d={revAreaD} fill="url(#revenue-area-gradient-standalone)" />
                     <path d={revLineD} fill="none" stroke="#10B981" strokeWidth="3" strokeLinecap="round" />
+
+                    {/* Target Reference Line for Revenue */}
+                    {targetRevY !== null && (
+                      <g className="group">
+                        <line
+                          x1={revPadLeft}
+                          y1={targetRevY}
+                          x2={width - revPadRight}
+                          y2={targetRevY}
+                          stroke="#EF4444"
+                          strokeWidth="2"
+                          strokeDasharray="5 4"
+                        />
+                        <rect
+                          x={width - revPadRight - 110}
+                          y={Math.max(2, targetRevY - 14)}
+                          width="110"
+                          height="14"
+                          rx="3"
+                          className="fill-red-600/90 dark:fill-red-950/90 stroke-red-500"
+                          strokeWidth="0.5"
+                        />
+                        <text
+                          x={width - revPadRight - 55}
+                          y={Math.max(2, targetRevY - 14) + 10}
+                          textAnchor="middle"
+                          className="fill-white font-mono text-[9px] font-bold"
+                        >
+                          Hedef: {formatUSD(totalTargetRevenue)}
+                        </text>
+                      </g>
+                    )}
 
                     {pointsRev.map((p) => {
                       const isSelected = viewWeekNumber === p.item.weekNumber;
@@ -1501,6 +1545,12 @@ export default function ForecastInputPage() {
                       <span className="h-3 w-3 rounded-full bg-cyan-500" />
                       <span className="text-slate-700 dark:text-slate-300">GP%</span>
                     </div>
+                    {totalTargetGP > 0 && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="h-0.5 w-3.5 bg-red-500 border-b border-dashed border-red-500" />
+                        <span className="text-red-600 dark:text-red-400 font-bold">Hedef GP</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1549,6 +1599,38 @@ export default function ForecastInputPage() {
                     <path d={gpLineD} fill="none" stroke="#F59E0B" strokeWidth="2.5" strokeLinecap="round" />
 
                     <path d={gpPercentLineD} fill="none" stroke="#06B6D4" strokeWidth="2.5" strokeDasharray="5 3" strokeLinecap="round" />
+
+                    {/* Target Reference Line for GP */}
+                    {targetGpY !== null && (
+                      <g className="group">
+                        <line
+                          x1={gpPadLeft}
+                          y1={targetGpY}
+                          x2={width - gpPadRight}
+                          y2={targetGpY}
+                          stroke="#EF4444"
+                          strokeWidth="2"
+                          strokeDasharray="5 4"
+                        />
+                        <rect
+                          x={width - gpPadRight - 110}
+                          y={Math.max(2, targetGpY - 14)}
+                          width="110"
+                          height="14"
+                          rx="3"
+                          className="fill-red-600/90 dark:fill-red-950/90 stroke-red-500"
+                          strokeWidth="0.5"
+                        />
+                        <text
+                          x={width - gpPadRight - 55}
+                          y={Math.max(2, targetGpY - 14) + 10}
+                          textAnchor="middle"
+                          className="fill-white font-mono text-[9px] font-bold"
+                        >
+                          Hedef: {formatUSD(totalTargetGP)}
+                        </text>
+                      </g>
+                    )}
 
                     {pointsGp.map((p, idx) => {
                       const pctP = pointsGpPercent[idx];
