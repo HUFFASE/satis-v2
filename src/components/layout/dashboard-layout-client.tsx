@@ -19,16 +19,20 @@ export default function DashboardLayoutClient({ children, user }: DashboardLayou
   return (
     <div className="min-h-screen flex bg-white dark:bg-slate-950">
       {/* Fixed Navigation Sidebar */}
-      <Sidebar user={user} isCollapsed={isCollapsed} setIsCollapsed={setIsCollapsed} />
+      <div className="print-hide">
+        <Sidebar user={user} isCollapsed={isCollapsed} setIsCollapsed={setIsCollapsed} />
+      </div>
 
       {/* Main Content Wrapper */}
       <div 
-        className={`flex flex-col flex-1 min-w-0 transition-all duration-300 ${
+        className={`print-reset-layout flex flex-col flex-1 min-w-0 transition-all duration-300 ${
           isCollapsed ? "pl-16" : "pl-64"
         }`}
       >
         {/* Header Navigation bar */}
-        <Topbar user={user} />
+        <div className="print-hide">
+          <Topbar user={user} />
+        </div>
 
         {/* Dynamic page contents with light cream corporate background */}
         <main className="flex-1 bg-white dark:bg-slate-950 overflow-y-auto">

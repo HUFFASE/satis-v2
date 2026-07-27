@@ -7,9 +7,9 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-heading: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -39,6 +39,21 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  /* Data-visualisation tokens. Marka yeşiline demirlenmiş tek hue'lu seri rampası
+     + ayrılmış durum paleti. Değerler validate_palette.js ile doğrulandı:
+     seri/track/grid kontrastları ve durum paleti için ayrıntı aşağıdaki :root bloğunda. */
+  --color-viz-series: var(--viz-series);
+  --color-viz-series-soft: var(--viz-series-soft);
+  --color-viz-track: var(--viz-track);
+  --color-viz-grid: var(--viz-grid);
+  --color-viz-ref: var(--viz-ref);
+  --color-viz-surface: var(--viz-surface);
+  --color-viz-good: var(--viz-good);
+  --color-viz-warn: var(--viz-warn);
+  --color-viz-crit: var(--viz-crit);
+  --color-viz-good-ink: var(--viz-good-ink);
+  --color-viz-warn-ink: var(--viz-warn-ink);
+  --color-viz-crit-ink: var(--viz-crit-ink);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -67,11 +82,37 @@
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  /* Marka yeşili rampası (tek hue, açık -> koyu). chart-1..5 sıralı/ordinal
+     kullanım içindir; kategorik kimlik için değil. */
+  --chart-1: #d6f0e3;
+  --chart-2: #a7e0c2;
+  --chart-3: #4fa97f;
+  --chart-4: #2e5a43;
+  --chart-5: #1f3a2e;
+
+  /* --- Data-viz: açık tema (yüzey #ffffff) ---
+     viz-series  #2e5a43  yüzeye karşı 7.90:1  (marka yeşili, tek seri)
+     viz-track   #d6f0e3  aynı rampanın açık basamağı (dolmamış meter yolu)
+     viz-grid    #e2e8f0  hairline, geri planda
+     viz-ref     #1f3a2e  hedef referans çizgisi, 12.33:1
+     Durum paleti (mark katmanı, hepsi >= 3:1; CVD ΔE 8.6 — hedefin üstünde):
+     good #047857 5.48:1 · warn #d97706 3.19:1 · crit #dc2626 4.83:1
+     Durum paleti (metin katmanı, hepsi >= 4.5:1 WCAG):
+     good #047857 5.48:1 · warn #b45309 5.02:1 · crit #b91c1c 6.47:1
+     Metin katmanında warn/crit normal görüşte ΔE 9.1 ile birbirine yakın kalır;
+     bu yüzden achievement değerleri renge ek olarak yön ikonu + sayı taşır. */
+  --viz-surface: #ffffff;
+  --viz-series: #2e5a43;
+  --viz-series-soft: #a7e0c2;
+  --viz-track: #d6f0e3;
+  --viz-grid: #e2e8f0;
+  --viz-ref: #1f3a2e;
+  --viz-good: #047857;
+  --viz-warn: #d97706;
+  --viz-crit: #dc2626;
+  --viz-good-ink: #047857;
+  --viz-warn-ink: #b45309;
+  --viz-crit-ink: #b91c1c;
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -102,11 +143,29 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --chart-1: #1f3a2e;
+  --chart-2: #2e5a43;
+  --chart-3: #4fa97f;
+  --chart-4: #a7e0c2;
+  --chart-5: #d6f0e3;
+
+  /* --- Data-viz: koyu tema (kart yüzeyi #0f172a) ---
+     Açık temanın çevrilmiş hali değil; koyu yüzey için ayrıca seçilmiş basamaklar.
+     viz-series #4fa97f 6.22:1 · viz-track #1f3a2e 1.45:1 · viz-ref #a7e0c2 11.97:1
+     Durum: good #4ade80 10.25:1 · warn #fbbf24 10.69:1 · crit #f87171 6.45:1
+     (normal görüş ΔE 19.6 — eşiğin üstünde; CVD ΔE 7.3 uyarı bandında, ikon ile karşılanıyor) */
+  --viz-surface: #0f172a;
+  --viz-series: #4fa97f;
+  --viz-series-soft: #2e5a43;
+  --viz-track: #1f3a2e;
+  --viz-grid: #1e293b;
+  --viz-ref: #a7e0c2;
+  --viz-good: #4ade80;
+  --viz-warn: #fbbf24;
+  --viz-crit: #f87171;
+  --viz-good-ink: #4ade80;
+  --viz-warn-ink: #fbbf24;
+  --viz-crit-ink: #f87171;
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
@@ -126,5 +185,66 @@
   }
   html {
     @apply font-sans;
+  }
+}
+
+/* --- Yazdırma / PDF çıktısı ---
+   Çıktı ayrı bir şablondan üretilmez, sayfanın kendisi yazdırılır. Böylece
+   kartlar, ölçerler ve SVG grafikler ekrandakiyle birebir aynı olur ve
+   metin/grafik vektör kalır. `print-hide` işaretli kabuk ve etkileşim
+   öğeleri çıktıdan düşer. */
+@media print {
+  /* Tarayıcılar yazdırırken arka planları varsayılan olarak atar; ölçer
+     dolguları ve tablo başlıkları rengini bu olmadan kaybediyor. */
+  *,
+  *::before,
+  *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .print-hide {
+    display: none !important;
+  }
+
+  /* Kabuk kaldırıldığı için içerik tam genişliğe yayılır. */
+  .print-reset-layout {
+    padding-left: 0 !important;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+  }
+
+  main {
+    overflow: visible !important;
+  }
+
+  /* Kart, bölüm ve tablo satırları sayfa sonunda ikiye bölünmez. */
+  .print-block {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  tr,
+  thead {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  /* Ekranda kaydırılan alanlar çıktıda tamamen açılır. */
+  .print-expand {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  @page {
+    size: A4 landscape;
+    margin: 12mm;
   }
 }

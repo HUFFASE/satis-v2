@@ -49,6 +49,9 @@ import {
   X,
 } from "lucide-react";
 import { MultiSelectFilter, FilterOption } from "@/components/ui/multi-select-filter";
+import { formatPercent, formatUSD } from "@/components/viz/format";
+import { GpPercentCell } from "@/components/viz/status";
+import { ValueTile } from "@/components/viz/tiles";
 import { getActuals, upsertActual, getSessionUser, importBacklogFromXls } from "./actions";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 
@@ -193,22 +196,8 @@ export default function ActualsPage() {
   };
 
   // Helper formatters
-  const formatUSD = (val: number) => {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(val);
-  };
-
   const formatUpdatedAt = (value: Date | string | null) => {
     return value ? new Date(value).toLocaleString("tr-TR") : "Girilmemiş";
-  };
-
-  const formatPercent = (revenue: number, gp: number) => {
-    if (revenue <= 0) return "0.0%";
-    return `${((gp / revenue) * 100).toFixed(1)}%`;
   };
 
   // Calculate live GP%
@@ -216,7 +205,7 @@ export default function ActualsPage() {
     const revenue = parseFloat(backlogInput);
     const gp = parseFloat(invoicedInput);
     if (isNaN(revenue) || isNaN(gp) || revenue <= 0) return "0.0%";
-    return formatPercent(revenue, gp);
+    return formatPercent((gp / revenue) * 100);
   };
 
   // Multi-select filter states (Satış Müdürü -> Marka)
@@ -285,6 +274,9 @@ export default function ActualsPage() {
   const totalRevenue = filteredActuals.reduce((sum, item) => sum + item.backlog, 0);
   const totalGP = filteredActuals.reduce((sum, item) => sum + item.invoiced, 0);
   const totalGPPercent = totalRevenue > 0 ? (totalGP / totalRevenue) * 100 : 0;
+  // updatedAt yalnızca kayıt girildiğinde dolar; girilmemiş markaların sayısı buradan çıkar.
+  const enteredBacklogCount = filteredActuals.filter((row) => row.updatedAt !== null).length;
+  const missingBacklogCount = filteredActuals.length - enteredBacklogCount;
 
   const managerGroups = useMemo<ManagerActualGroup[]>(() => {
     const groupMap = new Map<string, ManagerActualGroup>();
@@ -552,52 +544,35 @@ export default function ActualsPage() {
         </div>
       </div>
 
-      {/* Summary totals */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Total Revenue */}
-        <div className="bg-white dark:bg-slate-900 p-5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider font-sans">
-              {user?.role === "DIREKTOR" ? "Toplam Revenue (Tüm)" : "Toplam Revenue (Sizin)"}
-            </span>
-            <h3 className="text-2xl font-bold text-slate-800 dark:text-slate-100 font-sans">
-              {formatUSD(totalRevenue)}
-            </h3>
-          </div>
-          <div className="h-10 w-10 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <Briefcase className="h-5 w-5" />
-          </div>
-        </div>
-
-        {/* Total GP */}
-        <div className="bg-white dark:bg-slate-900 p-5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider font-sans">
-              {user?.role === "DIREKTOR" ? "Toplam GP (Tüm)" : "Toplam GP (Sizin)"}
-            </span>
-            <h3 className="text-2xl font-bold text-slate-800 dark:text-slate-100 font-sans">
-              {formatUSD(totalGP)}
-            </h3>
-          </div>
-          <div className="h-10 w-10 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <Receipt className="h-5 w-5" />
-          </div>
-        </div>
-
-        {/* GP Percent */}
-        <div className="bg-white dark:bg-slate-900 p-5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider font-sans">
-              Ortalama GP Oranı
-            </span>
-            <h3 className="text-2xl font-bold text-slate-800 dark:text-slate-100 font-sans">
-              {totalGPPercent.toFixed(1)}%
-            </h3>
-          </div>
-          <div className="h-10 w-10 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <Percent className="h-5 w-5" />
-          </div>
-        </div>
+      {/* Backlog girişi tamamlanmamış marka sayısı daha önce görünmüyordu. */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <ValueTile
+          label={user?.role === "DIREKTOR" ? "Toplam Backlog" : "Toplam Backlog (Sizin)"}
+          value={formatUSD(totalRevenue)}
+          icon={Briefcase}
+          rows={[{ label: "Gösterilen marka", value: `${filteredActuals.length}` }]}
+        />
+        <ValueTile
+          label={user?.role === "DIREKTOR" ? "Toplam Faturalanan" : "Toplam Faturalanan (Sizin)"}
+          value={formatUSD(totalGP)}
+          icon={Receipt}
+          rows={[
+            // Faturalanan/backlog oranının bir hedefi yok; renk taşımaz.
+            { label: "Ortalama oran", value: formatPercent(totalGPPercent) },
+          ]}
+        />
+        <ValueTile
+          label="Backlog Girişi"
+          value={`${enteredBacklogCount}/${filteredActuals.length}`}
+          icon={Percent}
+          rows={[
+            {
+              label: "Girilmemiş",
+              value: `${missingBacklogCount}`,
+              status: missingBacklogCount > 0 ? "crit" : "good",
+            },
+          ]}
+        />
       </div>
 
       {/* Backlog Table */}
@@ -654,8 +629,11 @@ export default function ActualsPage() {
                       </TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.backlog)}</TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.invoiced)}</TableCell>
-                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-800 dark:text-emerald-300">
-                        {formatPercent(group.backlog, group.invoiced)}
+                      <TableCell className="text-right font-mono text-sm font-extrabold tabular-nums">
+                        <GpPercentCell
+                          value={group.backlog > 0 ? (group.invoiced / group.backlog) * 100 : 0}
+                          revenue={group.backlog}
+                        />
                       </TableCell>
                       <TableCell className="text-center text-slate-500 font-sans text-[11px]">
                         {formatUpdatedAt(group.latestUpdatedAt)}
@@ -673,8 +651,11 @@ export default function ActualsPage() {
                           </TableCell>
                           <TableCell className="text-right font-mono text-xs">{formatUSD(row.backlog)}</TableCell>
                           <TableCell className="text-right font-mono text-xs">{formatUSD(row.invoiced)}</TableCell>
-                          <TableCell className="text-right font-mono text-xs font-semibold text-emerald-800 dark:text-emerald-400">
-                            {formatPercent(row.backlog, row.invoiced)}
+                          <TableCell className="text-right font-mono text-xs font-semibold tabular-nums">
+                            <GpPercentCell
+                              value={row.backlog > 0 ? (row.invoiced / row.backlog) * 100 : 0}
+                              revenue={row.backlog}
+                            />
                           </TableCell>
                           <TableCell className="text-center text-slate-500 font-sans text-[11px]">
                             {row.updatedAt ? (

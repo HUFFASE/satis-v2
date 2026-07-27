@@ -68,7 +68,7 @@ export async function getDashboardData(quarter?: number) {
     orderBy: { name: "asc" },
   });
 
-  const [targets, activeForecasts, actualRows] = await Promise.all([
+  const [targets, activeForecasts, actualRows, trendRows] = await Promise.all([
     prisma.target.findMany({
       where: {
         vendorId: { in: accessibleVendorIds },
@@ -89,11 +89,37 @@ export async function getDashboardData(quarter?: number) {
         ...(isCurrentQuarter ? { weekNumber: { lte: current.weekInQuarter } } : {}),
       },
     }),
+    // Haftalık trend: aktif olmayan versiyonlar dahil değil, her hafta o haftanın
+    // yürürlükteki forecast'i olarak okunur.
+    prisma.forecast.groupBy({
+      by: ["weekNumber"],
+      where: {
+        vendorId: { in: accessibleVendorIds },
+        fiscalPeriodId: selectedPeriod.id,
+      },
+      _sum: { revenue: true, gp: true },
+      _count: { _all: true },
+    }),
   ]);
 
   const targetMap = new Map(targets.map((target) => [target.vendorId, target]));
   const activeForecastMap = new Map(activeForecasts.map((forecast) => [forecast.vendorId, forecast]));
   const latestActualMap = getLatestBacklogSnapshots(actualRows, isCurrentQuarter ? current.weekInQuarter : undefined);
+
+  // Geçmiş çeyreklerde 13 haftanın tamamı, içinde bulunulan çeyrekte yalnızca
+  // yaşanmış haftalar gösterilir; aksi halde çizgi gelecek haftalarda sıfıra düşer.
+  const lastTrendWeek = isCurrentQuarter ? Math.min(13, Math.max(1, current.weekInQuarter)) : 13;
+  const trendMap = new Map(trendRows.map((row) => [row.weekNumber, row]));
+  const weeklyTrend = Array.from({ length: lastTrendWeek }, (_, index) => {
+    const weekNumber = index + 1;
+    const row = trendMap.get(weekNumber);
+    return {
+      weekNumber,
+      revenue: row?._sum.revenue ? Number(row._sum.revenue) : 0,
+      gp: row?._sum.gp ? Number(row._sum.gp) : 0,
+      vendorCount: row?._count._all ?? 0,
+    };
+  });
 
   const managerMap = new Map<
     string,
@@ -217,10 +243,19 @@ export async function getDashboardData(quarter?: number) {
         }
         return items;
       })
-    )
-    .slice(0, 12);
+    );
+
+  // Kesme işlemi önceliğe göre sıralandıktan sonra yapılır; aksi halde listenin
+  // sonundaki "high" bir uyarı, baştaki "low" uyarılar yüzünden düşebiliyordu.
+  const severityRank: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  const sortedAttentionItems = [...attentionItems].sort(
+    (a, b) => (severityRank[a.severity] ?? 3) - (severityRank[b.severity] ?? 3)
+  );
+  const attentionLimit = 12;
 
   return {
+    attentionTotalCount: sortedAttentionItems.length,
+    weeklyTrend,
     currentContext: current,
     selectedFiscalYear: current.fiscalYear,
     selectedQuarter,
@@ -231,6 +266,6 @@ export async function getDashboardData(quarter?: number) {
     },
     current: enrichMetrics(currentTotals),
     managers,
-    attentionItems,
+    attentionItems: sortedAttentionItems.slice(0, attentionLimit),
   };
 }

@@ -33,7 +33,10 @@ function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
   return (
     <tbody
       data-slot="table-body"
-      className={cn("[&_tr:last-child]:border-0", className)}
+      // Yalnızca son satırın ALT çizgisi kaldırılır. Daha önce `border-0` ile tüm
+      // kenar kalınlıkları sıfırlanıyordu; bu, satıra verilen `border-l-4` gibi
+      // vurgu şeritlerini de son satırda görünmez yapıyordu.
+      className={cn("[&_tr:last-child]:border-b-0", className)}
       {...props}
     />
   )

@@ -46,6 +46,9 @@ import {
   X,
 } from "lucide-react";
 import { MultiSelectFilter, FilterOption } from "@/components/ui/multi-select-filter";
+import { formatPercent, formatUSD } from "@/components/viz/format";
+import { AchievementCell, GpPercentCell, getGpStatus } from "@/components/viz/status";
+import { AchievementTile, ValueTile } from "@/components/viz/tiles";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 import { getClosings, importClosingsFromXls } from "./actions";
 
@@ -101,30 +104,12 @@ function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
-function formatUSD(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(value);
-}
-
-function formatPercent(value: number) {
-  return `${value.toFixed(1)}%`;
-}
-
 function calculatePercent(value: number, target: number) {
   return target > 0 ? (value / target) * 100 : 0;
 }
 
 function calculateGpPercent(revenue: number, gp: number) {
   return revenue > 0 ? (gp / revenue) * 100 : 0;
-}
-
-function getAchievementTone(value: number) {
-  if (value >= 100) return "text-emerald-700 dark:text-emerald-400";
-  if (value >= 75) return "text-amber-700 dark:text-amber-400";
-  return "text-red-700 dark:text-red-400";
 }
 
 function escapeExcelCell(value: string) {
@@ -384,6 +369,7 @@ export default function ClosingPage() {
   const targetAchievement = calculatePercent(totals.closingRevenue, totals.targetRevenue);
   const forecastAchievement = calculatePercent(totals.closingRevenue, totals.forecastRevenue);
   const closingGpPercent = calculateGpPercent(totals.closingRevenue, totals.closingGp);
+  const targetGpPercentTotal = calculateGpPercent(totals.targetRevenue, totals.targetGp);
 
   return (
     <div className="space-y-6 p-6">
@@ -473,38 +459,49 @@ export default function ClosingPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="flex min-h-28 items-center justify-between rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div>
-            <span className="text-xs font-semibold uppercase text-slate-500">Kapanış NSB</span>
-            <div className="mt-1 text-2xl font-bold text-slate-950 dark:text-slate-100">{formatUSD(totals.closingRevenue)}</div>
-            <div className="mt-1 text-xs font-medium text-slate-500">GP {formatUSD(totals.closingGp)}</div>
-          </div>
-          <CheckCircle2 className="h-6 w-6 text-emerald-700" />
-        </div>
-        <div className="flex min-h-28 items-center justify-between rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div>
-            <span className="text-xs font-semibold uppercase text-slate-500">Target Achievement</span>
-            <div className={`mt-1 text-2xl font-bold ${getAchievementTone(targetAchievement)}`}>{formatPercent(targetAchievement)}</div>
-            <div className="mt-1 text-xs font-medium text-slate-500">Target {formatUSD(totals.targetRevenue)}</div>
-          </div>
-          <Target className="h-6 w-6 text-emerald-700" />
-        </div>
-        <div className="flex min-h-28 items-center justify-between rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div>
-            <span className="text-xs font-semibold uppercase text-slate-500">Forecast vs Kapanış</span>
-            <div className={`mt-1 text-2xl font-bold ${getAchievementTone(forecastAchievement)}`}>{formatPercent(forecastAchievement)}</div>
-            <div className="mt-1 text-xs font-medium text-slate-500">Forecast {formatUSD(totals.forecastRevenue)}</div>
-          </div>
-          <TrendingUp className="h-6 w-6 text-emerald-700" />
-        </div>
-        <div className="flex min-h-28 items-center justify-between rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div>
-            <span className="text-xs font-semibold uppercase text-slate-500">Kapanış GP%</span>
-            <div className="mt-1 text-2xl font-bold text-slate-950 dark:text-slate-100">{formatPercent(closingGpPercent)}</div>
-            <div className="mt-1 text-xs font-medium text-slate-500">{totals.closedCount}/{rows.length} marka yüklü</div>
-          </div>
-          <Percent className="h-6 w-6 text-emerald-700" />
-        </div>
+        <AchievementTile
+          label="Target Achievement"
+          achievement={targetAchievement}
+          forecastValue={totals.closingRevenue}
+          targetValue={totals.targetRevenue}
+          valueLabel="Kapanış"
+          targetLabel="Target"
+          icon={Target}
+        />
+        <AchievementTile
+          label="Forecast vs Kapanış"
+          achievement={forecastAchievement}
+          forecastValue={totals.closingRevenue}
+          targetValue={totals.forecastRevenue}
+          valueLabel="Kapanış"
+          targetLabel="Forecast"
+          icon={TrendingUp}
+        />
+        <ValueTile
+          label="Kapanış GP"
+          value={formatUSD(totals.closingGp)}
+          icon={CheckCircle2}
+          rows={[
+            { label: "Kapanış NSB", value: formatUSD(totals.closingRevenue) },
+            {
+              label: "Kapanış GP%",
+              value: formatPercent(closingGpPercent),
+              status: getGpStatus(closingGpPercent, targetGpPercentTotal),
+            },
+          ]}
+        />
+        <ValueTile
+          label="Kapanış Girişi"
+          value={`${totals.closedCount}/${rows.length}`}
+          icon={Percent}
+          rows={[
+            {
+              label: "Girilmemiş",
+              value: `${Math.max(0, rows.length - totals.closedCount)}`,
+              status: rows.length - totals.closedCount > 0 ? "crit" : "good",
+            },
+          ]}
+        />
       </div>
 
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -558,9 +555,19 @@ export default function ClosingPage() {
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.forecastRevenue)}</TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.closingRevenue)}</TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.closingGp)}</TableCell>
-                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-800 dark:text-emerald-300">{formatPercent(groupGpPercent)}</TableCell>
-                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAchievementTone(groupTargetAchievement)}`}>{formatPercent(groupTargetAchievement)}</TableCell>
-                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAchievementTone(groupForecastAchievement)}`}>{formatPercent(groupForecastAchievement)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold tabular-nums">
+                        <GpPercentCell
+                          value={groupGpPercent}
+                          revenue={group.closingRevenue}
+                          targetGpPercent={calculateGpPercent(group.targetRevenue, group.targetGp)}
+                        />
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold tabular-nums">
+                        <AchievementCell value={groupTargetAchievement} target={group.targetRevenue} />
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold tabular-nums">
+                        <AchievementCell value={groupForecastAchievement} target={group.forecastRevenue} />
+                      </TableCell>
                     </TableRow>
                     {isExpanded &&
                       group.rows.map((row) => (
@@ -573,12 +580,18 @@ export default function ClosingPage() {
                           <TableCell className="text-right font-mono text-xs">{formatUSD(row.forecastRevenue)}</TableCell>
                           <TableCell className="text-right font-mono text-xs">{formatUSD(row.closingRevenue)}</TableCell>
                           <TableCell className="text-right font-mono text-xs">{formatUSD(row.closingGp)}</TableCell>
-                          <TableCell className="text-right font-mono text-xs font-bold">{formatPercent(row.closingGpPercent)}</TableCell>
-                          <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(row.targetAchievement)}`}>
-                            {formatPercent(row.targetAchievement)}
+                          <TableCell className="text-right font-mono text-xs font-bold tabular-nums">
+                            <GpPercentCell
+                              value={row.closingGpPercent}
+                              revenue={row.closingRevenue}
+                              targetGpPercent={calculateGpPercent(row.targetRevenue, row.targetGp)}
+                            />
                           </TableCell>
-                          <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(row.forecastAchievement)}`}>
-                            {formatPercent(row.forecastAchievement)}
+                          <TableCell className="text-right font-mono text-xs font-bold tabular-nums">
+                            <AchievementCell value={row.targetAchievement} target={row.targetRevenue} />
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-xs font-bold tabular-nums">
+                            <AchievementCell value={row.forecastAchievement} target={row.forecastRevenue} />
                           </TableCell>
                         </TableRow>
                       ))}
