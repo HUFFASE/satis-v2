@@ -33,6 +33,7 @@ import {
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
   AlertTriangle,
+  ArrowRight,
   Calendar,
   ChevronDown,
   ChevronRight,
@@ -52,9 +53,12 @@ import {
   X,
   MessageSquare,
   StickyNote,
-  BarChart3,
 } from "lucide-react";
 import { MultiSelectFilter, FilterOption } from "@/components/ui/multi-select-filter";
+import { formatCompactUSD, formatPercent, formatSignedPoints, formatUSD } from "@/components/viz/format";
+import { AchievementCell, GpPercentCell, STATUS_META, StatusValue, getGpStatus } from "@/components/viz/status";
+import { AchievementTile, ValueTile } from "@/components/viz/tiles";
+import { TrendCard, TrendMeasure } from "@/components/viz/trend-chart";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 import {
   copyPreviousWeekForecastsForManager,
@@ -175,32 +179,8 @@ function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
-function formatUSD(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(value);
-}
-
-function formatPercent(value: number) {
-  return `${value.toFixed(1)}%`;
-}
-
 function formatDate(value: Date | string | null) {
   return value ? new Date(value).toLocaleString("tr-TR") : "Girilmemiş";
-}
-
-function getPercentTone(value: number) {
-  if (value >= 20) return "text-emerald-700 dark:text-emerald-400";
-  if (value >= 10) return "text-amber-700 dark:text-amber-400";
-  return "text-red-700 dark:text-red-400";
-}
-
-function getAchievementTone(value: number) {
-  if (value >= 100) return "text-emerald-700 dark:text-emerald-400";
-  if (value >= 75) return "text-amber-700 dark:text-amber-400";
-  return "text-red-700 dark:text-red-400";
 }
 
 export default function ForecastInputPage() {
@@ -371,6 +351,74 @@ export default function ForecastInputPage() {
   const totalTargetGPPercent = totalTargetRevenue > 0 ? (totalTargetGP / totalTargetRevenue) * 100 : 0;
   const totalRevenueAchievement = totalTargetRevenue > 0 ? (totalRevenue / totalTargetRevenue) * 100 : 0;
   const totalGPAchievement = totalTargetGP > 0 ? (totalGP / totalTargetGP) * 100 : 0;
+
+  const trendCaption = useCallback(
+    (count: number) => `${count} kayıt`,
+    []
+  );
+
+  const revenueTrendMeasures: TrendMeasure[] = useMemo(
+    () => [
+      {
+        key: "revenue",
+        label: "NSB",
+        description: `FY${fiscalYear} Q${quarter} haftalık ciro akışı.`,
+        points: weeklyTrend.map((week) => ({
+          label: `H${week.weekNumber}`,
+          tooltipLabel: `Hafta ${week.weekNumber}`,
+          value: week.revenue,
+          caption: trendCaption(week.count),
+        })),
+        format: formatUSD,
+        formatAxis: formatCompactUSD,
+        target: totalTargetRevenue,
+        targetLabel: "Hedef NSB",
+        valueHeader: "Forecast NSB",
+      },
+    ],
+    [fiscalYear, quarter, weeklyTrend, totalTargetRevenue, trendCaption]
+  );
+
+  // GP ve GP% ayrı ölçüler olarak sunulur; ikisini tek grafikte iki eksene
+  // yerleştirmek ölçek hizası keyfî olduğu için yanıltıcı bir ilişki üretiyordu.
+  const gpTrendMeasures: TrendMeasure[] = useMemo(
+    () => [
+      {
+        key: "gp",
+        label: "GP",
+        description: `FY${fiscalYear} Q${quarter} haftalık brüt kâr akışı.`,
+        points: weeklyTrend.map((week) => ({
+          label: `H${week.weekNumber}`,
+          tooltipLabel: `Hafta ${week.weekNumber}`,
+          value: week.gp,
+          caption: trendCaption(week.count),
+        })),
+        format: formatUSD,
+        formatAxis: formatCompactUSD,
+        target: totalTargetGP,
+        targetLabel: "Hedef GP",
+        valueHeader: "Forecast GP",
+      },
+      {
+        key: "gpPercent",
+        label: "GP%",
+        description: `FY${fiscalYear} Q${quarter} haftalık kârlılık oranı.`,
+        points: weeklyTrend.map((week) => ({
+          label: `H${week.weekNumber}`,
+          tooltipLabel: `Hafta ${week.weekNumber}`,
+          value: week.revenue > 0 ? (week.gp / week.revenue) * 100 : 0,
+          caption: trendCaption(week.count),
+        })),
+        format: formatPercent,
+        formatAxis: (value: number) => `%${value.toFixed(1)}`,
+        target: totalTargetGPPercent,
+        targetLabel: "Hedef",
+        valueHeader: "Forecast GP%",
+        zeroBaseline: false,
+      },
+    ],
+    [fiscalYear, quarter, weeklyTrend, totalTargetGP, totalTargetGPPercent, trendCaption]
+  );
   const forecastedCount = filteredForecasts.filter((row) => row.hasForecast).length;
 
   const activeWeekLabel = isSelectedCurrentPeriod
@@ -849,39 +897,50 @@ export default function ForecastInputPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div>
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-              {user?.role === "DIREKTOR" ? "Toplam Aktif Forecast" : "Aktif Forecast Toplamınız"}
-            </span>
-            <h3 className="mt-1 text-2xl font-bold text-slate-900 dark:text-slate-100">{formatUSD(totalRevenue)}</h3>
-          </div>
-          <DollarSign className="h-5 w-5 text-emerald-700" />
-        </div>
-
-        <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div>
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Toplam GP</span>
-            <h3 className="mt-1 text-2xl font-bold text-slate-900 dark:text-slate-100">{formatUSD(totalGP)}</h3>
-          </div>
-          <TrendingUp className="h-5 w-5 text-emerald-700" />
-        </div>
-
-        <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div>
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Birleşik GP Oranı</span>
-            <h3 className={`mt-1 text-2xl font-bold ${getPercentTone(totalGPPercent)}`}>
-              {formatPercent(totalGPPercent)}
-            </h3>
-          </div>
-          <Percent className="h-5 w-5 text-emerald-700" />
-        </div>
+      {/* Hedef karşılaştırması zaten hesaplanıyordu ama kartlarda kullanılmıyordu;
+          artık her kart tutarı hedefiyle birlikte gösteriyor. */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <AchievementTile
+          label={user?.role === "DIREKTOR" ? "NSB Achievement" : "NSB Achievement (Sizin)"}
+          achievement={totalRevenueAchievement}
+          forecastValue={totalRevenue}
+          targetValue={totalTargetRevenue}
+          icon={DollarSign}
+        />
+        <AchievementTile
+          label="GP Achievement"
+          achievement={totalGPAchievement}
+          forecastValue={totalGP}
+          targetValue={totalTargetGP}
+          icon={TrendingUp}
+        />
+        <ValueTile
+          label="Birleşik GP Oranı"
+          value={formatPercent(totalGPPercent)}
+          icon={Percent}
+          rows={[
+            { label: "Hedef GP%", value: formatPercent(totalTargetGPPercent) },
+            { label: "Fark", value: formatSignedPoints(totalGPPercent - totalTargetGPPercent) },
+          ]}
+        />
+        <ValueTile
+          label="Forecast Girişi"
+          value={`${forecastedCount}/${forecasts.length}`}
+          icon={FileSpreadsheet}
+          rows={[
+            { label: "Gösterilen marka", value: `${filteredForecasts.length}` },
+            {
+              label: "Backlog uyarısı",
+              value: `${filteredForecasts.filter((row) => row.isBelowBacklog).length}`,
+              status: filteredForecasts.some((row) => row.isBelowBacklog) ? "crit" : "good",
+            },
+          ]}
+        />
       </div>
 
       {/* CRM & Scorecard Executive Banner */}
       {scorecards.length > 0 && (
-        <div className="rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50/70 via-white to-cyan-50/70 p-4.5 shadow-sm dark:border-emerald-900/50 dark:from-slate-900 dark:via-slate-900 dark:to-slate-900 space-y-3">
+        <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 shadow-sm dark:border-emerald-900/50 dark:bg-emerald-950/20">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2.5">
               <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#1F3A2E] text-white shadow-xs">
@@ -913,7 +972,8 @@ export default function ForecastInputPage() {
                   size="sm"
                   className="h-8.5 bg-[#1F3A2E] text-white hover:bg-[#2E5A43] text-xs font-bold gap-1.5 shadow-xs"
                 >
-                  <FileSpreadsheet className="h-4 w-4 text-emerald-400" /> Scorecard & CRM Raporu ➔
+                  <FileSpreadsheet className="h-4 w-4 text-emerald-400" /> Scorecard & CRM Raporu
+                  <ArrowRight className="h-3.5 w-3.5" />
                 </Button>
               </Link>
             </div>
@@ -934,9 +994,11 @@ export default function ForecastInputPage() {
             </div>
             <div className="rounded-lg border border-slate-200/80 bg-white/90 p-3 shadow-xs dark:border-slate-800 dark:bg-slate-950/40">
               <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Günü Geçmiş Açık İşler</span>
-              <span className="font-mono text-base font-bold text-red-600 dark:text-red-400">
-                {scorecards.reduce((acc, s) => acc + s.overdueCount, 0)} Açık İş
-              </span>
+              <StatusValue
+                className="font-mono text-base font-bold"
+                status={scorecards.reduce((acc, s) => acc + s.overdueCount, 0) > 0 ? "crit" : "good"}
+                value={`${scorecards.reduce((acc, s) => acc + s.overdueCount, 0)} Açık İş`}
+              />
             </div>
             <div className="rounded-lg border border-slate-200/80 bg-white/90 p-3 shadow-xs dark:border-slate-800 dark:bg-slate-950/40">
               <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Ort. CRM Sağlık Skoru</span>
@@ -961,7 +1023,7 @@ export default function ForecastInputPage() {
           </div>
         ) : (
           <Table>
-            <TableHeader className="bg-emerald-800 shadow-sm">
+            <TableHeader className="bg-emerald-900 shadow-sm">
               <TableRow>
                 <SortableTableHead
                   rowSpan={2}
@@ -971,16 +1033,16 @@ export default function ForecastInputPage() {
                   onClick={() => handleSort("managerName")}
                   className="min-w-52"
                 />
-                <th colSpan={3} className="border-b border-l border-emerald-600 bg-emerald-800 px-4 py-2.5 text-center text-sm font-extrabold uppercase tracking-wide text-white">
+                <th colSpan={3} className="border-b border-l border-emerald-700 bg-emerald-900 px-4 py-2.5 text-center text-sm font-extrabold uppercase tracking-wide text-white">
                   Hedef
                 </th>
-                <th colSpan={3} className="border-b border-l border-emerald-600 bg-emerald-800 px-4 py-2.5 text-center text-sm font-extrabold uppercase tracking-wide text-white">
+                <th colSpan={3} className="border-b border-l border-emerald-700 bg-emerald-900 px-4 py-2.5 text-center text-sm font-extrabold uppercase tracking-wide text-white">
                   Forecast
                 </th>
-                <th colSpan={2} className="border-b border-l border-emerald-600 bg-emerald-800 px-4 py-2.5 text-center text-sm font-extrabold uppercase tracking-wide text-white">
+                <th colSpan={2} className="border-b border-l border-emerald-700 bg-emerald-900 px-4 py-2.5 text-center text-sm font-extrabold uppercase tracking-wide text-white">
                   Achievement
                 </th>
-                <th rowSpan={2} className="border-b border-l border-emerald-600 bg-emerald-800 px-4 py-2 text-right text-xs font-extrabold uppercase tracking-wide text-white">
+                <th rowSpan={2} className="border-b border-l border-emerald-700 bg-emerald-900 px-4 py-2 text-right text-xs font-extrabold uppercase tracking-wide text-white">
                   İşlem
                 </th>
               </TableRow>
@@ -1047,7 +1109,7 @@ export default function ForecastInputPage() {
                                   </Badge>
                                 )}
                                 {sc && sc.weightedCrmPipeline > 0 && (
-                                  <Badge variant="outline" className="border-cyan-300 bg-cyan-50 text-cyan-900 text-[10px] font-mono font-bold dark:border-cyan-800 dark:bg-cyan-950/50 dark:text-cyan-300">
+                                  <Badge variant="outline" className="border-emerald-300 bg-white text-emerald-900 text-[10px] font-mono font-bold dark:border-emerald-800 dark:bg-slate-900 dark:text-emerald-300">
                                     Ağırlıklı CRM: {formatUSD(sc.weightedCrmPipeline)}
                                   </Badge>
                                 )}
@@ -1080,19 +1142,23 @@ export default function ForecastInputPage() {
                         {formatUSD(group.targetRevenue)}
                       </TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.targetGp)}</TableCell>
-                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getPercentTone(groupTargetGPPercent)}`}>
-                        {formatPercent(groupTargetGPPercent)}
+                      <TableCell className="text-right font-mono text-sm font-extrabold tabular-nums">
+                        <GpPercentCell value={groupTargetGPPercent} revenue={group.targetRevenue} />
                       </TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.revenue)}</TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.gp)}</TableCell>
-                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getPercentTone(groupGPPercent)}`}>
-                        {formatPercent(groupGPPercent)}
+                      <TableCell className="text-right font-mono text-sm font-extrabold tabular-nums">
+                        <GpPercentCell
+                          value={groupGPPercent}
+                          revenue={group.revenue}
+                          targetGpPercent={groupTargetGPPercent}
+                        />
                       </TableCell>
-                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAchievementTone(groupRevenueAchievement)}`}>
-                        {formatPercent(groupRevenueAchievement)}
+                      <TableCell className="text-right font-mono text-sm font-extrabold tabular-nums">
+                        <AchievementCell value={groupRevenueAchievement} target={group.targetRevenue} />
                       </TableCell>
-                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAchievementTone(groupGPAchievement)}`}>
-                        {formatPercent(groupGPAchievement)}
+                      <TableCell className="text-right font-mono text-sm font-extrabold tabular-nums">
+                        <AchievementCell value={groupGPAchievement} target={group.targetGp} />
                       </TableCell>
                       <TableCell className="text-right text-[11px] font-medium text-slate-500">
                         Satış Müdürü
@@ -1193,8 +1259,8 @@ export default function ForecastInputPage() {
                           <TableCell className="text-right font-mono text-[11px]">
                             {row.hasTarget ? formatUSD(row.targetGp) : "-"}
                           </TableCell>
-                          <TableCell className={`text-right font-mono text-[11px] font-bold ${getPercentTone(row.targetGpPercent)}`}>
-                            {row.hasTarget ? formatPercent(row.targetGpPercent) : "-"}
+                          <TableCell className="text-right font-mono text-[11px] font-bold tabular-nums">
+                            <GpPercentCell value={row.targetGpPercent} revenue={row.hasTarget ? row.targetRevenue : 0} />
                           </TableCell>
                           <TableCell className={`text-right font-mono text-xs ${row.isBelowBacklog ? "font-bold text-red-700 dark:text-red-300" : ""}`}>
                             {row.hasForecast ? (
@@ -1212,14 +1278,24 @@ export default function ForecastInputPage() {
                             )}
                           </TableCell>
                           <TableCell className="text-right font-mono text-xs">{row.hasForecast ? formatUSD(row.gp) : "-"}</TableCell>
-                          <TableCell className={`text-right font-mono text-xs font-bold ${getPercentTone(row.gpPercent)}`}>
-                            {row.hasForecast ? formatPercent(row.gpPercent) : "-"}
+                          <TableCell className="text-right font-mono text-xs font-bold tabular-nums">
+                            <GpPercentCell
+                              value={row.gpPercent}
+                              revenue={row.hasForecast ? row.revenue : 0}
+                              targetGpPercent={row.targetGpPercent}
+                            />
                           </TableCell>
-                          <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(row.revenueAchievement)}`}>
-                            {row.hasTarget && row.hasForecast ? formatPercent(row.revenueAchievement) : "-"}
+                          <TableCell className="text-right font-mono text-xs font-bold tabular-nums">
+                            <AchievementCell
+                              value={row.revenueAchievement}
+                              target={row.hasTarget && row.hasForecast ? row.targetRevenue : 0}
+                            />
                           </TableCell>
-                          <TableCell className={`text-right font-mono text-xs font-bold ${getAchievementTone(row.gpAchievement)}`}>
-                            {row.hasTarget && row.hasForecast ? formatPercent(row.gpAchievement) : "-"}
+                          <TableCell className="text-right font-mono text-xs font-bold tabular-nums">
+                            <AchievementCell
+                              value={row.gpAchievement}
+                              target={row.hasTarget && row.hasForecast ? row.targetGp : 0}
+                            />
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-2">
@@ -1277,446 +1353,20 @@ export default function ForecastInputPage() {
         )}
       </div>
 
-      {/* Sleek Side-by-Side Forecast Trend Charts */}
-      {weeklyTrend.length === 0 || weeklyTrend.every((w) => w.revenue === 0 && w.gp === 0) ? (
-        <div className="rounded-xl border border-slate-200 bg-white p-6 text-center text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-900 font-sans shadow-sm">
-          Seçili mali dönem için henüz haftalık forecast trend verisi bulunmuyor.
-        </div>
-      ) : (
-        (() => {
-          const maxRev = Math.max(1, totalTargetRevenue > 0 ? totalTargetRevenue * 1.05 : 0, ...weeklyTrend.map((w) => w.revenue));
-          const maxGp = Math.max(1, totalTargetGP > 0 ? totalTargetGP * 1.05 : 0, ...weeklyTrend.map((w) => w.gp));
-          const maxGpPercent = Math.max(10, ...weeklyTrend.map((w) => (w.revenue > 0 ? (w.gp / w.revenue) * 100 : 0)));
-          const maxGpPercentScaled = Math.min(100, Math.ceil(maxGpPercent / 10) * 10 || 50);
-
-          const width = 450;
-          const height = 220;
-          const paddingY = 30;
-
-          // Chart 1 (Revenue): Left padding 55, Right 20
-          const revPadLeft = 55;
-          const revPadRight = 20;
-          const revChartW = width - revPadLeft - revPadRight;
-          const revChartH = height - paddingY * 2;
-
-          const targetRevY = totalTargetRevenue > 0 ? height - paddingY - (totalTargetRevenue / maxRev) * revChartH : null;
-
-          const pointsRev = weeklyTrend.map((item, idx) => {
-            const x = revPadLeft + (idx / (weeklyTrend.length - 1)) * revChartW;
-            const y = height - paddingY - (item.revenue / maxRev) * revChartH;
-            return { x, y, item };
-          });
-
-          // Chart 2 (GP & GP%): Left padding 55, Right 45
-          const gpPadLeft = 55;
-          const gpPadRight = 45;
-          const gpChartW = width - gpPadLeft - gpPadRight;
-          const gpChartH = height - paddingY * 2;
-
-          const targetGpY = totalTargetGP > 0 ? height - paddingY - (totalTargetGP / maxGp) * gpChartH : null;
-
-          const pointsGp = weeklyTrend.map((item, idx) => {
-            const x = gpPadLeft + (idx / (weeklyTrend.length - 1)) * gpChartW;
-            const y = height - paddingY - (item.gp / maxGp) * gpChartH;
-            return { x, y, item };
-          });
-
-          const pointsGpPercent = weeklyTrend.map((item, idx) => {
-            const gpPct = item.revenue > 0 ? (item.gp / item.revenue) * 100 : 0;
-            const x = gpPadLeft + (idx / (weeklyTrend.length - 1)) * gpChartW;
-            const y = height - paddingY - (gpPct / maxGpPercentScaled) * gpChartH;
-            return { x, y, item, gpPct };
-          });
-
-          const buildSmoothPath = (pts: { x: number; y: number }[]) => {
-            if (pts.length === 0) return "";
-            let d = `M ${pts[0].x},${pts[0].y}`;
-            for (let i = 0; i < pts.length - 1; i++) {
-              const p0 = pts[i];
-              const p1 = pts[i + 1];
-              const cp1x = p0.x + (p1.x - p0.x) / 2;
-              const cp1y = p0.y;
-              const cp2x = p1.x - (p1.x - p0.x) / 2;
-              const cp2y = p1.y;
-              d += ` C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p1.x},${p1.y}`;
-            }
-            return d;
-          };
-
-          const revLineD = buildSmoothPath(pointsRev);
-          const revAreaD = `${revLineD} L ${pointsRev[pointsRev.length - 1].x},${height - paddingY} L ${pointsRev[0].x},${height - paddingY} Z`;
-
-          const gpLineD = buildSmoothPath(pointsGp);
-          const gpAreaD = `${gpLineD} L ${pointsGp[pointsGp.length - 1].x},${height - paddingY} L ${pointsGp[0].x},${height - paddingY} Z`;
-
-          const gpPercentLineD = buildSmoothPath(pointsGpPercent);
-
-          const revYTicks = [0, 0.33, 0.66, 1].map((ratio) => ({
-            value: Math.round(maxRev * ratio),
-            y: height - paddingY - ratio * revChartH,
-          }));
-
-          const gpYTicks = [0, 0.33, 0.66, 1].map((ratio) => ({
-            usdValue: Math.round(maxGp * ratio),
-            pctValue: Math.round(maxGpPercentScaled * ratio),
-            y: height - paddingY - ratio * gpChartH,
-          }));
-
-          return (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              {/* Left Chart: Revenue Trend */}
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-serif text-base font-bold text-[#1F3A2E] dark:text-emerald-400 flex items-center gap-2">
-                      <BarChart3 className="h-4.5 w-4.5 text-emerald-700 dark:text-emerald-400" />
-                      Revenue (NSB) Trendi
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 font-sans">
-                      FY{fiscalYear} Q{quarter} 1-13. haftalık ciro akışı.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3 text-xs font-semibold font-sans">
-                    <div className="flex items-center gap-1.5">
-                      <span className="h-3 w-3 rounded-xs bg-[#2E5A43]" />
-                      <span className="text-slate-700 dark:text-slate-300">Revenue</span>
-                    </div>
-                    {totalTargetRevenue > 0 && (
-                      <div className="flex items-center gap-1.5">
-                        <span className="h-0.5 w-3.5 bg-red-500 border-b border-dashed border-red-500" />
-                        <span className="text-red-600 dark:text-red-400 font-bold">Hedef Ciro</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="relative w-full overflow-hidden pt-1">
-                  <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto font-sans overflow-visible">
-                    <defs>
-                      <linearGradient id="revenue-area-gradient-standalone" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#10B981" stopOpacity="0.45" />
-                        <stop offset="100%" stopColor="#10B981" stopOpacity="0.02" />
-                      </linearGradient>
-                    </defs>
-
-                    {/* Horizontal Gridlines & Y-Axis */}
-                    {revYTicks.map((tick, i) => (
-                      <g key={i}>
-                        <line
-                          x1={revPadLeft}
-                          y1={tick.y}
-                          x2={width - revPadRight}
-                          y2={tick.y}
-                          stroke="currentColor"
-                          strokeDasharray="4 4"
-                          className="text-slate-200 dark:text-slate-800"
-                          strokeWidth="1"
-                        />
-                        <text
-                          x={revPadLeft - 8}
-                          y={tick.y + 3}
-                          textAnchor="end"
-                          className="fill-slate-400 text-[10px] font-mono font-medium"
-                        >
-                          {formatUSD(tick.value).replace(".00", "")}
-                        </text>
-                      </g>
-                    ))}
-
-                    <path d={revAreaD} fill="url(#revenue-area-gradient-standalone)" />
-                    <path d={revLineD} fill="none" stroke="#10B981" strokeWidth="3" strokeLinecap="round" />
-
-                    {/* Target Reference Line for Revenue */}
-                    {targetRevY !== null && (
-                      <g className="group">
-                        <line
-                          x1={revPadLeft}
-                          y1={targetRevY}
-                          x2={width - revPadRight}
-                          y2={targetRevY}
-                          stroke="#EF4444"
-                          strokeWidth="2"
-                          strokeDasharray="5 4"
-                        />
-                        <rect
-                          x={width - revPadRight - 110}
-                          y={Math.max(2, targetRevY - 14)}
-                          width="110"
-                          height="14"
-                          rx="3"
-                          className="fill-red-600/90 dark:fill-red-950/90 stroke-red-500"
-                          strokeWidth="0.5"
-                        />
-                        <text
-                          x={width - revPadRight - 55}
-                          y={Math.max(2, targetRevY - 14) + 10}
-                          textAnchor="middle"
-                          className="fill-white font-mono text-[9px] font-bold"
-                        >
-                          Hedef: {formatUSD(totalTargetRevenue)}
-                        </text>
-                      </g>
-                    )}
-
-                    {pointsRev.map((p) => {
-                      const isSelected = viewWeekNumber === p.item.weekNumber;
-                      const isActiveWeek = p.item.weekNumber === currentContext.weekInQuarter && isSelectedCurrentPeriod;
-
-                      return (
-                        <g key={p.item.weekNumber} className="group cursor-pointer" onClick={() => setViewWeekNumber(p.item.weekNumber)}>
-                          <line
-                            x1={p.x}
-                            y1={paddingY}
-                            x2={p.x}
-                            y2={height - paddingY}
-                            stroke="#10B981"
-                            strokeWidth="1.5"
-                            strokeDasharray="3 3"
-                            className="opacity-0 group-hover:opacity-100 transition-opacity"
-                          />
-                          <circle
-                            cx={p.x}
-                            cy={p.y}
-                            r={isSelected ? "5.5" : "3.5"}
-                            className="fill-emerald-500 stroke-white dark:stroke-slate-900 group-hover:r-6 transition-all shadow-md"
-                            strokeWidth="2"
-                          />
-
-                          {/* Interactive Hover Tooltip Badge */}
-                          <g className="opacity-0 group-hover:opacity-100 transition-all pointer-events-none">
-                            <rect
-                              x={Math.max(10, Math.min(width - 130, p.x - 60))}
-                              y={Math.max(4, p.y - 36)}
-                              width="120"
-                              height="26"
-                              rx="6"
-                              className="fill-slate-900/95 dark:fill-slate-950/95 stroke-emerald-500/50 shadow-lg"
-                              strokeWidth="1"
-                            />
-                            <text
-                              x={Math.max(10, Math.min(width - 130, p.x - 60)) + 60}
-                              y={Math.max(4, p.y - 36) + 17}
-                              textAnchor="middle"
-                              className="fill-emerald-300 text-[10px] font-mono font-bold"
-                            >
-                              H{p.item.weekNumber}: {formatUSD(p.item.revenue)}
-                            </text>
-                          </g>
-
-                          <text
-                            x={p.x}
-                            y={height - 6}
-                            textAnchor="middle"
-                            className={`text-[10px] font-mono font-bold transition-all ${
-                              isSelected
-                                ? "fill-emerald-600 dark:fill-emerald-400 font-extrabold text-[11px]"
-                                : isActiveWeek
-                                ? "fill-emerald-700 dark:fill-emerald-300"
-                                : "fill-slate-500 group-hover:fill-slate-900 dark:group-hover:fill-slate-100"
-                            }`}
-                          >
-                            H{p.item.weekNumber}
-                          </text>
-                        </g>
-                      );
-                    })}
-                  </svg>
-                </div>
-              </div>
-
-              {/* Right Chart: GP & % Karlılık Trend */}
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-serif text-base font-bold text-[#1F3A2E] dark:text-emerald-400 flex items-center gap-2">
-                      <BarChart3 className="h-4.5 w-4.5 text-amber-600 dark:text-amber-400" />
-                      GP (Brüt Kâr) & % Karlılık Trendi
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 font-sans">
-                      FY{fiscalYear} Q{quarter} 1-13. haftalık brüt kâr ve % GP oranı.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3 text-xs font-semibold font-sans">
-                    <div className="flex items-center gap-1.5">
-                      <span className="h-3 w-3 rounded-xs bg-amber-500" />
-                      <span className="text-slate-700 dark:text-slate-300">GP</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="h-3 w-3 rounded-full bg-cyan-500" />
-                      <span className="text-slate-700 dark:text-slate-300">GP%</span>
-                    </div>
-                    {totalTargetGP > 0 && (
-                      <div className="flex items-center gap-1.5">
-                        <span className="h-0.5 w-3.5 bg-red-500 border-b border-dashed border-red-500" />
-                        <span className="text-red-600 dark:text-red-400 font-bold">Hedef GP</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="relative w-full overflow-hidden pt-1">
-                  <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto font-sans overflow-visible">
-                    <defs>
-                      <linearGradient id="gp-area-gradient-standalone" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.4" />
-                        <stop offset="100%" stopColor="#F59E0B" stopOpacity="0.02" />
-                      </linearGradient>
-                    </defs>
-
-                    {/* Horizontal Gridlines, Left Y-Axis (GP USD) & Right Y-Axis (% GP) */}
-                    {gpYTicks.map((tick, i) => (
-                      <g key={i}>
-                        <line
-                          x1={gpPadLeft}
-                          y1={tick.y}
-                          x2={width - gpPadRight}
-                          y2={tick.y}
-                          stroke="currentColor"
-                          strokeDasharray="4 4"
-                          className="text-slate-200 dark:text-slate-800"
-                          strokeWidth="1"
-                        />
-                        <text
-                          x={gpPadLeft - 8}
-                          y={tick.y + 3}
-                          textAnchor="end"
-                          className="fill-slate-400 text-[10px] font-mono font-medium"
-                        >
-                          {formatUSD(tick.usdValue).replace(".00", "")}
-                        </text>
-                        <text
-                          x={width - gpPadRight + 8}
-                          y={tick.y + 3}
-                          textAnchor="start"
-                          className="fill-cyan-600 dark:fill-cyan-400 text-[10px] font-mono font-bold"
-                        >
-                          %{tick.pctValue}
-                        </text>
-                      </g>
-                    ))}
-
-                    <path d={gpAreaD} fill="url(#gp-area-gradient-standalone)" />
-                    <path d={gpLineD} fill="none" stroke="#F59E0B" strokeWidth="2.5" strokeLinecap="round" />
-
-                    <path d={gpPercentLineD} fill="none" stroke="#06B6D4" strokeWidth="2.5" strokeDasharray="5 3" strokeLinecap="round" />
-
-                    {/* Target Reference Line for GP */}
-                    {targetGpY !== null && (
-                      <g className="group">
-                        <line
-                          x1={gpPadLeft}
-                          y1={targetGpY}
-                          x2={width - gpPadRight}
-                          y2={targetGpY}
-                          stroke="#EF4444"
-                          strokeWidth="2"
-                          strokeDasharray="5 4"
-                        />
-                        <rect
-                          x={width - gpPadRight - 110}
-                          y={Math.max(2, targetGpY - 14)}
-                          width="110"
-                          height="14"
-                          rx="3"
-                          className="fill-red-600/90 dark:fill-red-950/90 stroke-red-500"
-                          strokeWidth="0.5"
-                        />
-                        <text
-                          x={width - gpPadRight - 55}
-                          y={Math.max(2, targetGpY - 14) + 10}
-                          textAnchor="middle"
-                          className="fill-white font-mono text-[9px] font-bold"
-                        >
-                          Hedef: {formatUSD(totalTargetGP)}
-                        </text>
-                      </g>
-                    )}
-
-                    {pointsGp.map((p, idx) => {
-                      const pctP = pointsGpPercent[idx];
-                      const isSelected = viewWeekNumber === p.item.weekNumber;
-                      const isActiveWeek = p.item.weekNumber === currentContext.weekInQuarter && isSelectedCurrentPeriod;
-
-                      return (
-                        <g key={p.item.weekNumber} className="group cursor-pointer" onClick={() => setViewWeekNumber(p.item.weekNumber)}>
-                          <line
-                            x1={p.x}
-                            y1={paddingY}
-                            x2={p.x}
-                            y2={height - paddingY}
-                            stroke="#F59E0B"
-                            strokeWidth="1.5"
-                            strokeDasharray="3 3"
-                            className="opacity-0 group-hover:opacity-100 transition-opacity"
-                          />
-                          <circle
-                            cx={p.x}
-                            cy={p.y}
-                            r={isSelected ? "5" : "3.5"}
-                            className="fill-amber-500 stroke-white dark:stroke-slate-900 group-hover:r-5.5 transition-all shadow-md"
-                            strokeWidth="1.5"
-                          />
-                          <circle
-                            cx={pctP.x}
-                            cy={pctP.y}
-                            r={isSelected ? "4.5" : "3"}
-                            className="fill-cyan-500 stroke-white dark:stroke-slate-900 group-hover:r-5 transition-all shadow-md"
-                            strokeWidth="1.5"
-                          />
-
-                          {/* Interactive Hover Tooltip Badge */}
-                          <g className="opacity-0 group-hover:opacity-100 transition-all pointer-events-none">
-                            <rect
-                              x={Math.max(10, Math.min(width - 135, p.x - 62.5))}
-                              y={Math.max(4, Math.min(p.y, pctP.y) - 44)}
-                              width="125"
-                              height="36"
-                              rx="6"
-                              className="fill-slate-900/95 dark:fill-slate-950/95 stroke-amber-500/50 shadow-lg"
-                              strokeWidth="1"
-                            />
-                            <text
-                              x={Math.max(10, Math.min(width - 135, p.x - 62.5)) + 62.5}
-                              y={Math.max(4, Math.min(p.y, pctP.y) - 44) + 15}
-                              textAnchor="middle"
-                              className="fill-amber-300 text-[10px] font-mono font-bold"
-                            >
-                              GP: {formatUSD(p.item.gp)}
-                            </text>
-                            <text
-                              x={Math.max(10, Math.min(width - 135, p.x - 62.5)) + 62.5}
-                              y={Math.max(4, Math.min(p.y, pctP.y) - 44) + 29}
-                              textAnchor="middle"
-                              className="fill-cyan-300 text-[10px] font-mono font-bold"
-                            >
-                              GP%: {formatPercent(pctP.gpPct)}
-                            </text>
-                          </g>
-
-                          <text
-                            x={p.x}
-                            y={height - 6}
-                            textAnchor="middle"
-                            className={`text-[10px] font-mono font-bold transition-all ${
-                              isSelected
-                                ? "fill-amber-600 dark:fill-amber-400 font-extrabold text-[11px]"
-                                : isActiveWeek
-                                ? "fill-amber-700 dark:fill-amber-300"
-                                : "fill-slate-500 group-hover:fill-slate-900 dark:group-hover:fill-slate-100"
-                            }`}
-                          >
-                            H{p.item.weekNumber}
-                          </text>
-                        </g>
-                      );
-                    })}
-                  </svg>
-                </div>
-              </div>
-            </div>
-          );
-        })()
-      )}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <TrendCard
+          title="Revenue (NSB) Trendi"
+          measures={revenueTrendMeasures}
+          emptyMessage="Seçili dönem için henüz haftalık forecast verisi bulunmuyor."
+          captionHeader="Kayıt"
+        />
+        <TrendCard
+          title="GP & Kârlılık Trendi"
+          measures={gpTrendMeasures}
+          emptyMessage="Seçili dönem için henüz haftalık forecast verisi bulunmuyor."
+          captionHeader="Kayıt"
+        />
+      </div>
 
       <div className="flex justify-end gap-3">
         <Button
@@ -1985,7 +1635,7 @@ export default function ForecastInputPage() {
 
             <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 dark:bg-slate-800/40">
               <span className="text-xs font-semibold uppercase text-slate-500">Hesaplanan GP%</span>
-              <span className={`font-mono text-sm font-bold ${getPercentTone(liveGPPercent)}`}>
+              <span className={`font-mono text-sm font-bold ${STATUS_META[getGpStatus(liveGPPercent, selectedForecast?.targetGpPercent ?? 0)].ink}`}>
                 {formatPercent(liveGPPercent)}
               </span>
             </div>
@@ -2044,7 +1694,7 @@ export default function ForecastInputPage() {
                       <TableCell className="font-medium">{version.weekNumber}. Hafta</TableCell>
                       <TableCell className="text-right font-mono text-xs">{formatUSD(version.revenue)}</TableCell>
                       <TableCell className="text-right font-mono text-xs">{formatUSD(version.gp)}</TableCell>
-                      <TableCell className={`text-right font-mono text-xs font-bold ${getPercentTone(version.gpPercent)}`}>
+                      <TableCell className={`text-right font-mono text-xs font-bold tabular-nums ${STATUS_META[getGpStatus(version.gpPercent, historyVendor?.targetGpPercent ?? 0)].ink}`}>
                         {formatPercent(version.gpPercent)}
                       </TableCell>
                       <TableCell>

@@ -50,6 +50,8 @@ import {
   getManagerScorecardsAction,
   getVendorScorecardsAction,
 } from "@/app/(app)/forecast-input/actions";
+import { getManagerProfileCards, type ManagerProfileCard } from "./actions";
+import { ManagerIdentityCard } from "@/components/scorecard/manager-identity-card";
 
 interface ScorecardManagerItem {
   id: string;
@@ -111,6 +113,8 @@ export default function ScorecardPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [managerScorecards, setManagerScorecards] = useState<ScorecardManagerItem[]>([]);
   const [vendorScorecards, setVendorScorecards] = useState<ScorecardVendorItem[]>([]);
+  const [managerProfiles, setManagerProfiles] = useState<ManagerProfileCard[]>([]);
+  const [selectedManagerId, setSelectedManagerId] = useState<string | null>(null);
 
   // CRM Modal & Audit States
   const [isCrmUploadModalOpen, setIsCrmUploadModalOpen] = useState(false);
@@ -161,12 +165,14 @@ export default function ScorecardPage() {
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [mgrRes, vndRes] = await Promise.all([
+      const [mgrRes, vndRes, profileRes] = await Promise.all([
         getManagerScorecardsAction(fiscalYear, quarter, weekNumber),
         getVendorScorecardsAction(fiscalYear, quarter, weekNumber),
+        getManagerProfileCards(fiscalYear, quarter, weekNumber),
       ]);
       setManagerScorecards(mgrRes);
       setVendorScorecards(vndRes);
+      setManagerProfiles(profileRes);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Veriler yüklenirken hata oluştu.");
     } finally {
@@ -179,11 +185,13 @@ export default function ScorecardPage() {
     Promise.all([
       getManagerScorecardsAction(fiscalYear, quarter, weekNumber),
       getVendorScorecardsAction(fiscalYear, quarter, weekNumber),
+      getManagerProfileCards(fiscalYear, quarter, weekNumber),
     ])
-      .then(([mgrRes, vndRes]) => {
+      .then(([mgrRes, vndRes, profileRes]) => {
         if (!active) return;
         setManagerScorecards(mgrRes);
         setVendorScorecards(vndRes);
+        setManagerProfiles(profileRes);
       })
       .catch((err: unknown) => {
         if (!active) return;
@@ -283,6 +291,17 @@ export default function ScorecardPage() {
 
   return (
     <div className="space-y-6">
+      {/* Satış müdürü kimlik kartı ve seçici şerit. Değerler karne tablosundan
+          değil, dönemin forecast/hedef/kapanış kayıtlarından hesaplanır. */}
+      <ManagerIdentityCard
+        managers={managerProfiles}
+        selectedUserId={selectedManagerId}
+        onSelect={setSelectedManagerId}
+        periodLabel={`FY${fiscalYear} Q${quarter} · ${weekNumber}. Hafta`}
+      />
+
+      <hr className="border-slate-200 dark:border-slate-800" />
+
       {/* Active Period Info Alert Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 text-xs text-emerald-900 dark:border-emerald-900/40 dark:bg-emerald-950/40 dark:text-emerald-300">
         <div className="flex items-center gap-2">

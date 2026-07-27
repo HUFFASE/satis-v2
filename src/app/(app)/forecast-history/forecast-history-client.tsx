@@ -34,6 +34,10 @@ import {
   FileSpreadsheet,
 } from "lucide-react";
 import { MultiSelectFilter, FilterOption } from "@/components/ui/multi-select-filter";
+import { formatCompactUSD, formatPercent, formatUSD } from "@/components/viz/format";
+import { STATUS_META, StatusValue, getAccuracyStatus } from "@/components/viz/status";
+import { EmptyState, Meter, ValueTile } from "@/components/viz/tiles";
+import { TrendCard, TrendMeasure } from "@/components/viz/trend-chart";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 import { getForecastHistoryData, getForecastTrendData } from "./actions";
 
@@ -49,194 +53,53 @@ function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
-function formatUSD(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(value);
-}
-
-function formatPercent(value: number) {
-  return `${value.toFixed(1)}%`;
-}
-
 function formatDate(value: Date | string) {
   return new Date(value).toLocaleString("tr-TR");
 }
 
-function getAccuracyTone(value: number) {
-  if (value >= 90) return "text-emerald-700 dark:text-emerald-400";
-  if (value >= 75) return "text-amber-700 dark:text-amber-400";
-  return "text-red-700 dark:text-red-400";
-}
-
-function MiniBar({ value, colorClass = "bg-[#2E5A43]" }: { value: number; colorClass?: string }) {
+/**
+ * Uzunluk büyüklüğü kodladığı için taban değeri yok: sıfır, sıfır genişlikte
+ * çizilir. Önceki %4'lük taban, hiç forecast girilmemiş haftaları da dolu
+ * gösteriyordu.
+ */
+function MiniBar({ value, color = "var(--viz-series)" }: { value: number; color?: string }) {
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-      <div className={`h-full rounded-full ${colorClass}`} style={{ width: `${Math.max(4, Math.min(100, value))}%` }} />
+    <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--viz-track)]">
+      <div
+        className="h-full rounded-full transition-[width] duration-500"
+        style={{ width: `${Math.max(0, Math.min(100, value))}%`, backgroundColor: color }}
+      />
     </div>
   );
 }
 
-function Kpi({
-  label,
-  value,
-  subValue,
-  icon: Icon,
-}: {
-  label: string;
-  value: string;
-  subValue: string;
-  icon: React.ElementType;
-}) {
-  return (
-    <div className="flex min-h-28 items-center justify-between rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-      <div className="min-w-0">
-        <span className="text-xs font-semibold uppercase text-slate-500">{label}</span>
-        <div className="mt-1 truncate text-2xl font-bold text-slate-950 dark:text-slate-100">{value}</div>
-        <div className="mt-1 text-xs font-medium text-slate-500">{subValue}</div>
-      </div>
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
-        <Icon className="h-5 w-5" />
-      </div>
-    </div>
-  );
-}
-
-function TrendLineChart({ points }: { points: ForecastTrendData["points"] }) {
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  const width = 860;
-  const height = 340;
-  const paddingLeft = 76;
-  const paddingRight = 88;
-  const paddingTop = 34;
-  const paddingBottom = 56;
-  const chartWidth = width - paddingLeft - paddingRight;
-  const chartHeight = height - paddingTop - paddingBottom;
-  const maxGp = Math.max(1, ...points.map((point) => point.gp));
-  const maxRevenue = Math.max(1, ...points.map((point) => point.revenue));
-
-  const getX = (index: number) =>
-    paddingLeft + (points.length <= 1 ? chartWidth / 2 : (index / (points.length - 1)) * chartWidth);
-  const getGpY = (value: number) => paddingTop + chartHeight - (value / maxGp) * chartHeight;
-  const getRevenueY = (value: number) => paddingTop + chartHeight - (value / maxRevenue) * chartHeight;
-  const makePath = (field: "gp" | "revenue") =>
-    points
-      .map((point, index) => {
-        const y = field === "gp" ? getGpY(point.gp) : getRevenueY(point.revenue);
-        return `${index === 0 ? "M" : "L"} ${getX(index)} ${y}`;
-      })
-      .join(" ");
-  const compactMoney = (value: number) =>
-    new Intl.NumberFormat("en-US", {
-      notation: "compact",
-      maximumFractionDigits: 1,
-    }).format(value);
-  const hoveredPoint = hoveredIndex === null ? null : points[hoveredIndex];
-  const tooltipX = hoveredIndex === null ? 0 : getX(hoveredIndex);
-  const tooltipY = hoveredPoint ? Math.min(getGpY(hoveredPoint.gp), getRevenueY(hoveredPoint.revenue)) : 0;
-  const tooltipBoxX = Math.max(10, Math.min(width - 190, tooltipX - 90));
-  const tooltipBoxY = Math.max(10, tooltipY - 94);
-
-  if (points.length === 0) {
-    return (
-      <div className="flex h-72 items-center justify-center rounded-lg bg-slate-50 text-sm text-slate-500 dark:bg-slate-950/30">
-        Seçili filtreler için forecast değişimi bulunamadı.
-      </div>
-    );
-  }
+/**
+ * Doğruluk kartı. Accuracy zaten 0-100 aralığında olduğu için ölçer doğal ölçek;
+ * hedef karşılaştırması gerekmiyor.
+ */
+function AccuracyTile({ label, value, icon: Icon }: { label: string; value: number; icon: React.ElementType }) {
+  const status = getAccuracyStatus(value);
+  const { ink, Icon: StatusIcon, label: statusLabel } = STATUS_META[status];
 
   return (
-    <div className="overflow-x-auto">
-      <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[860px] rounded-lg bg-slate-50 dark:bg-slate-950/30" aria-label="Forecast değişimi çizgi grafiği">
-        {[0, 1, 2, 3, 4].map((line) => {
-          const ratio = line / 4;
-          const y = paddingTop + ratio * chartHeight;
-          const gpTick = maxGp - maxGp * ratio;
-          const revenueTick = maxRevenue - maxRevenue * ratio;
-          return (
-            <g key={line}>
-              <line x1={paddingLeft} x2={width - paddingRight} y1={y} y2={y} stroke="#E2E8F0" strokeWidth="1" />
-              <text x={paddingLeft - 10} y={y + 4} textAnchor="end" className="fill-emerald-800 text-[10px] font-semibold">
-                {compactMoney(gpTick)}
-              </text>
-              <text x={width - paddingRight + 10} y={y + 4} textAnchor="start" className="fill-slate-600 text-[10px] font-semibold">
-                {compactMoney(revenueTick)}
-              </text>
-            </g>
-          );
-        })}
-        <line x1={paddingLeft} x2={paddingLeft} y1={paddingTop} y2={paddingTop + chartHeight} stroke="#2E5A43" strokeWidth="2" />
-        <line x1={width - paddingRight} x2={width - paddingRight} y1={paddingTop} y2={paddingTop + chartHeight} stroke="#64748B" strokeWidth="2" />
-        <text x={paddingLeft} y={20} textAnchor="start" className="fill-emerald-800 text-[11px] font-bold">
-          GP
-        </text>
-        <text x={width - paddingRight} y={20} textAnchor="end" className="fill-slate-600 text-[11px] font-bold">
-          Revenue / NSB
-        </text>
-        <path d={makePath("revenue")} fill="none" stroke="#64748B" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" />
-        <path d={makePath("gp")} fill="none" stroke="#2E5A43" strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" />
-        {points.map((point, index) => (
-          <g
-            key={`${point.label}-${index}`}
-            className="cursor-pointer"
-            tabIndex={0}
-            onBlur={() => setHoveredIndex(null)}
-            onFocus={() => setHoveredIndex(index)}
-            onMouseEnter={() => setHoveredIndex(index)}
-            onMouseLeave={() => setHoveredIndex(null)}
-          >
-            <title>{`${point.label} | GP ${formatUSD(point.gp)} | NSB ${formatUSD(point.revenue)}`}</title>
-            <circle cx={getX(index)} cy={getRevenueY(point.revenue)} r="12" fill="transparent" />
-            <circle cx={getX(index)} cy={getGpY(point.gp)} r="12" fill="transparent" />
-            <circle cx={getX(index)} cy={getRevenueY(point.revenue)} r="4" fill="#64748B" />
-            <circle cx={getX(index)} cy={getGpY(point.gp)} r="5" fill="#2E5A43" />
-            <text x={getX(index)} y={height - 24} textAnchor="middle" className="fill-slate-500 text-[10px] font-semibold">
-              H{point.weekNumber}
-            </text>
-            <text x={getX(index)} y={height - 10} textAnchor="middle" className="fill-slate-400 text-[9px] font-medium">
-              Q{point.quarter}
-            </text>
-          </g>
-        ))}
-        {hoveredPoint ? (
-          <g pointerEvents="none">
-            <line
-              x1={tooltipX}
-              x2={tooltipX}
-              y1={paddingTop}
-              y2={paddingTop + chartHeight}
-              stroke="#94A3B8"
-              strokeDasharray="4 4"
-              strokeWidth="1.5"
-            />
-            <rect
-              x={tooltipBoxX}
-              y={tooltipBoxY}
-              width="180"
-              height="82"
-              rx="8"
-              fill="#FFFFFF"
-              stroke="#CBD5E1"
-              strokeWidth="1"
-              className="dark:fill-slate-900 dark:stroke-slate-700"
-            />
-            <text x={tooltipBoxX + 12} y={tooltipBoxY + 20} className="fill-slate-900 text-[12px] font-bold dark:fill-slate-100">
-              {hoveredPoint.label}
-            </text>
-            <text x={tooltipBoxX + 12} y={tooltipBoxY + 42} className="fill-emerald-800 text-[12px] font-bold">
-              GP: {formatUSD(hoveredPoint.gp)}
-            </text>
-            <text x={tooltipBoxX + 12} y={tooltipBoxY + 62} className="fill-slate-600 text-[12px] font-bold dark:fill-slate-300">
-              Revenue: {formatUSD(hoveredPoint.revenue)}
-            </text>
-            <text x={tooltipBoxX + 12} y={tooltipBoxY + 78} className="fill-slate-500 text-[10px] font-semibold">
-              GP% {formatPercent(hoveredPoint.gpPercent)}
-            </text>
-          </g>
-        ) : null}
-      </svg>
+    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex items-start justify-between gap-3">
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
+          <Icon className="h-4 w-4" aria-hidden="true" />
+        </span>
+      </div>
+      <div className={`mt-2 flex items-baseline gap-2 ${ink}`}>
+        <span className="font-sans text-3xl font-semibold leading-none">{formatPercent(value)}</span>
+        <span className="inline-flex items-center gap-1 text-xs font-semibold">
+          <StatusIcon className="h-3.5 w-3.5" aria-hidden="true" />
+          {statusLabel}
+        </span>
+      </div>
+      <Meter value={value} status={status} />
+      <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500 dark:border-slate-800">
+        Aktif forecast / hedef bazlı.
+      </p>
     </div>
   );
 }
@@ -304,6 +167,57 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
     setSelectedManagerIds([]);
     setSelectedVendorIds([]);
   };
+
+  // GP ve NSB büyüklükleri çok farklı; tek grafikte iki ayrı eksene yerleştirmek
+  // ölçek hizası keyfî olduğu için sahte bir ilişki üretiyordu. Ayrı ölçüler olarak sunulur.
+  const trendMeasures: TrendMeasure[] = useMemo(() => {
+    const points = trendData?.points ?? [];
+    // Birden fazla çeyrek seçiliyse hafta numaraları tekrar ettiği için
+    // (H13'ten sonra yine H1) eksen etiketine çeyrek de eklenir.
+    const spansMultiplePeriods =
+      new Set(points.map((point) => `${point.fiscalYear}:${point.quarter}`)).size > 1;
+    const toPoints = (pick: (point: (typeof points)[number]) => number) =>
+      points.map((point) => ({
+        label: spansMultiplePeriods ? `Q${point.quarter}H${point.weekNumber}` : `H${point.weekNumber}`,
+        tooltipLabel: point.label,
+        value: pick(point),
+        caption: `${point.count} kayıt (${point.activeCount} aktif)`,
+      }));
+
+    return [
+      {
+        key: "gp",
+        label: "GP",
+        description: "Seçili filtrelere göre haftalık forecast GP.",
+        points: toPoints((point) => point.gp),
+        format: formatUSD,
+        formatAxis: formatCompactUSD,
+        valueHeader: "Forecast GP",
+        periodHeader: "Dönem",
+      },
+      {
+        key: "revenue",
+        label: "NSB",
+        description: "Seçili filtrelere göre haftalık forecast NSB.",
+        points: toPoints((point) => point.revenue),
+        format: formatUSD,
+        formatAxis: formatCompactUSD,
+        valueHeader: "Forecast NSB",
+        periodHeader: "Dönem",
+      },
+      {
+        key: "gpPercent",
+        label: "GP%",
+        description: "Seçili filtrelere göre haftalık kârlılık oranı.",
+        points: toPoints((point) => point.gpPercent),
+        format: formatPercent,
+        formatAxis: (value: number) => `%${value.toFixed(1)}`,
+        valueHeader: "GP%",
+        periodHeader: "Dönem",
+        zeroBaseline: false,
+      },
+    ];
+  }, [trendData?.points]);
 
   const filteredManagers = useMemo(() => {
     return data.managers
@@ -523,10 +437,31 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Kpi label="Forecast Kayıt" value={data.totals.forecastCount.toString()} subValue={`${data.totals.activeCount} aktif, ${data.totals.archivedCount} arşiv`} icon={Archive} />
-        <Kpi label="Forecast NSB" value={formatUSD(data.totals.revenue)} subValue={`GP ${formatUSD(data.totals.gp)} / ${data.totals.vendorCount} marka`} icon={TrendingUp} />
-        <Kpi label="NSB Accuracy" value={formatPercent(data.totals.revenueAccuracy)} subValue="Aktif forecast/target bazlı" icon={Percent} />
-        <Kpi label="GP Accuracy" value={formatPercent(data.totals.gpAccuracy)} subValue="Aktif forecast/target bazlı" icon={BarChart3} />
+        <ValueTile
+          label="Forecast Kayıt"
+          value={data.totals.forecastCount.toString()}
+          icon={Archive}
+          rows={[
+            { label: "Aktif", value: data.totals.activeCount.toString() },
+            { label: "Arşiv", value: data.totals.archivedCount.toString() },
+          ]}
+        />
+        <ValueTile
+          label="Forecast NSB"
+          value={formatUSD(data.totals.revenue)}
+          icon={TrendingUp}
+          rows={[
+            { label: "Forecast GP", value: formatUSD(data.totals.gp) },
+            // Bu sayfanın toplamlarında hedef GP% taşınmıyor; karşılaştırma
+            // tabanı olmadan kârlılığa iyi/kötü demek yanıltır, renksiz bırakılır.
+            {
+              label: "GP%",
+              value: formatPercent(data.totals.revenue > 0 ? (data.totals.gp / data.totals.revenue) * 100 : 0),
+            },
+          ]}
+        />
+        <AccuracyTile label="NSB Accuracy" value={data.totals.revenueAccuracy} icon={Percent} />
+        <AccuracyTile label="GP Accuracy" value={data.totals.gpAccuracy} icon={BarChart3} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1fr]">
@@ -542,9 +477,7 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
           </div>
           <div className="space-y-3">
             {data.weeklySummary.length === 0 ? (
-              <div className="rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950/30">
-                Seçili çeyrek için forecast bulunamadı.
-              </div>
+              <EmptyState message="Seçili çeyrek için forecast bulunamadı." />
             ) : (
               data.weeklySummary.map((week) => (
                 <div key={week.weekNumber} className="grid gap-2 sm:grid-cols-[70px_1fr_86px] sm:items-center">
@@ -556,8 +489,11 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
                     </div>
                     <MiniBar value={(week.revenue / maxWeeklyRevenue) * 100} />
                   </div>
-                  <div className={`text-right font-mono text-xs font-bold ${getAccuracyTone(week.revenueAccuracy)}`}>
-                    {formatPercent(week.revenueAccuracy)}
+                  <div className="text-right font-mono text-xs font-bold tabular-nums">
+                    <StatusValue
+                      value={formatPercent(week.revenueAccuracy)}
+                      status={getAccuracyStatus(week.revenueAccuracy)}
+                    />
                   </div>
                 </div>
               ))
@@ -575,16 +511,30 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
             </div>
             <Users2 className="h-5 w-5 text-emerald-700" />
           </div>
+          {/* Filtre uygulanmış liste kullanılır; burası daha önce filtreleri
+              yok sayıp her zaman tüm satış müdürlerini gösteriyordu. */}
           <div className="space-y-3">
-            {data.managers.map((manager) => (
-              <div key={manager.id} className="grid gap-2 sm:grid-cols-[150px_1fr_76px] sm:items-center">
-                <div className="truncate text-xs font-semibold text-slate-700 dark:text-slate-300">{manager.managerName}</div>
-                <MiniBar value={manager.revenueAccuracy} colorClass={manager.revenueAccuracy >= 90 ? "bg-emerald-700" : manager.revenueAccuracy >= 75 ? "bg-amber-500" : "bg-red-600"} />
-                <div className={`text-right font-mono text-xs font-bold ${getAccuracyTone(manager.revenueAccuracy)}`}>
-                  {formatPercent(manager.revenueAccuracy)}
+            {filteredManagers.length === 0 ? (
+              <EmptyState message="Seçili filtrelere uyan satış müdürü yok." />
+            ) : (
+              filteredManagers.map((manager) => (
+                <div key={manager.id} className="grid gap-2 sm:grid-cols-[150px_1fr_76px] sm:items-center">
+                  <div className="truncate text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    {manager.managerName}
+                  </div>
+                  <MiniBar
+                    value={manager.revenueAccuracy}
+                    color={STATUS_META[getAccuracyStatus(manager.revenueAccuracy)].mark}
+                  />
+                  <div className="text-right font-mono text-xs font-bold tabular-nums">
+                    <StatusValue
+                      value={formatPercent(manager.revenueAccuracy)}
+                      status={getAccuracyStatus(manager.revenueAccuracy)}
+                    />
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -670,8 +620,11 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(manager.revenue)}</TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(manager.gp)}</TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-800 dark:text-emerald-300">{formatPercent(manager.gpPercent)}</TableCell>
-                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAccuracyTone(manager.revenueAccuracy)}`}>
-                        {formatPercent(manager.revenueAccuracy)}
+                      <TableCell className="text-right font-mono text-sm font-extrabold tabular-nums">
+                        <StatusValue
+                          value={formatPercent(manager.revenueAccuracy)}
+                          status={getAccuracyStatus(manager.revenueAccuracy)}
+                        />
                       </TableCell>
                       <TableCell />
                     </TableRow>
@@ -699,8 +652,11 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
                           <TableCell className="text-right font-mono text-xs">{formatUSD(week.revenue)}</TableCell>
                           <TableCell className="text-right font-mono text-xs">{formatUSD(week.gp)}</TableCell>
                           <TableCell className="text-right font-mono text-xs font-bold">{formatPercent(week.gpPercent)}</TableCell>
-                          <TableCell className={`text-right font-mono text-xs font-bold ${getAccuracyTone(week.revenueAccuracy)}`}>
-                            {formatPercent(week.revenueAccuracy)}
+                          <TableCell className="text-right font-mono text-xs font-bold tabular-nums">
+                            <StatusValue
+                              value={formatPercent(week.revenueAccuracy)}
+                              status={getAccuracyStatus(week.revenueAccuracy)}
+                            />
                           </TableCell>
                           <TableCell className="text-right text-[11px] text-slate-500">{formatDate(week.updatedAt)}</TableCell>
                         </TableRow>
@@ -741,8 +697,11 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(manager.revenue)}</TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(manager.gp)}</TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-800 dark:text-emerald-300">{formatPercent(manager.gpPercent)}</TableCell>
-                      <TableCell className={`text-right font-mono text-sm font-extrabold ${getAccuracyTone(manager.revenueAccuracy)}`}>
-                        {formatPercent(manager.revenueAccuracy)}
+                      <TableCell className="text-right font-mono text-sm font-extrabold tabular-nums">
+                        <StatusValue
+                          value={formatPercent(manager.revenueAccuracy)}
+                          status={getAccuracyStatus(manager.revenueAccuracy)}
+                        />
                       </TableCell>
                       <TableCell />
                     </TableRow>
@@ -777,8 +736,11 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
                               <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(vendor.revenue)}</TableCell>
                               <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(vendor.gp)}</TableCell>
                               <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-800 dark:text-emerald-300">{formatPercent(vendor.gpPercent)}</TableCell>
-                              <TableCell className={`text-right font-mono text-sm font-extrabold ${getAccuracyTone(vendor.revenueAccuracy)}`}>
-                                {formatPercent(vendor.revenueAccuracy)}
+                              <TableCell className="text-right font-mono text-sm font-extrabold tabular-nums">
+                                <StatusValue
+                                  value={formatPercent(vendor.revenueAccuracy)}
+                                  status={getAccuracyStatus(vendor.revenueAccuracy)}
+                                />
                               </TableCell>
                               <TableCell />
                             </TableRow>
@@ -804,8 +766,11 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
                                   <TableCell className="text-right font-mono text-xs">{formatUSD(row.revenue)}</TableCell>
                                   <TableCell className="text-right font-mono text-xs">{formatUSD(row.gp)}</TableCell>
                                   <TableCell className="text-right font-mono text-xs font-bold">{formatPercent(row.gpPercent)}</TableCell>
-                                  <TableCell className={`text-right font-mono text-xs font-bold ${getAccuracyTone(row.revenueAccuracy)}`}>
-                                    {formatPercent(row.revenueAccuracy)}
+                                  <TableCell className="text-right font-mono text-xs font-bold tabular-nums">
+                                    <StatusValue
+                                      value={formatPercent(row.revenueAccuracy)}
+                                      status={getAccuracyStatus(row.revenueAccuracy)}
+                                    />
                                   </TableCell>
                                   <TableCell className="text-right text-[11px] text-slate-500">{formatDate(row.updatedAt)}</TableCell>
                                 </TableRow>
@@ -827,7 +792,7 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
             <h3 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">
               Forecast Değişimi
             </h3>
-            <p className="text-xs text-slate-500">Seçili filtrelere göre haftalık GP ve NSB trendi.</p>
+            <p className="text-xs text-slate-500">Aşağıdaki filtreler yalnızca bu grafiği kapsar.</p>
           </div>
           {isTrendLoading && <Loader2 className="h-5 w-5 animate-spin text-emerald-700" />}
         </div>
@@ -912,12 +877,16 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
           </div>
         </div>
 
-        <TrendLineChart points={trendData?.points ?? []} />
-        <div className="mt-3 flex flex-wrap items-center gap-4 text-xs font-medium text-slate-500">
-          <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-[#2E5A43]" /> GP</span>
-          <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-slate-500" /> NSB</span>
-          <span>{trendData?.points.length ?? 0} hafta noktası</span>
-        </div>
+        <TrendCard
+          bare
+          title="Haftalık Akış"
+          measures={trendMeasures}
+          emptyMessage="Seçili filtreler için forecast değişimi bulunamadı."
+          captionHeader="Kayıt"
+        />
+        <p className="mt-2 text-xs font-medium text-slate-500">
+          {trendData?.points.length ?? 0} hafta noktası.
+        </p>
       </div>
     </div>
   );

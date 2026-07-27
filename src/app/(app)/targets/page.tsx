@@ -49,6 +49,9 @@ import {
   X,
 } from "lucide-react";
 import { MultiSelectFilter, FilterOption } from "@/components/ui/multi-select-filter";
+import { formatPercent, formatUSD } from "@/components/viz/format";
+import { GpPercentCell } from "@/components/viz/status";
+import { ValueTile } from "@/components/viz/tiles";
 import { getTargets, upsertTarget, getSessionUser, importTargetsFromXls } from "./actions";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 
@@ -191,22 +194,6 @@ export default function TargetsPage() {
     }
   };
 
-  // Helper formats
-  const formatUSD = (val: number) => {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(val);
-  };
-
-  const formatPercent = (revenue: number, gp: number) => {
-    if (revenue <= 0) return "0.0%";
-    const pct = (gp / revenue) * 100;
-    return `${pct.toFixed(1)}%`;
-  };
-
   const formatUpdatedAt = (value: Date | string | null) => {
     return value ? new Date(value).toLocaleString("tr-TR") : "Belirlenmemiş";
   };
@@ -285,6 +272,9 @@ export default function TargetsPage() {
   const totalRevenue = filteredTargets.reduce((sum, item) => sum + item.revenue, 0);
   const totalGP = filteredTargets.reduce((sum, item) => sum + item.gp, 0);
   const totalGPPercent = totalRevenue > 0 ? (totalGP / totalRevenue) * 100 : 0;
+  // updatedAt yalnızca kayıt girildiğinde dolar; hedefi olmayan markaların sayısı buradan çıkar.
+  const enteredTargetCount = filteredTargets.filter((row) => row.updatedAt !== null).length;
+  const missingTargetCount = filteredTargets.length - enteredTargetCount;
 
   const managerGroups = useMemo<ManagerTargetGroup[]>(() => {
     const groupMap = new Map<string, ManagerTargetGroup>();
@@ -551,52 +541,36 @@ export default function TargetsPage() {
         </div>
       </div>
 
-      {/* Totals Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Total Revenue */}
-        <div className="bg-white dark:bg-slate-900 p-5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider font-sans">
-              {user?.role === "DIREKTOR" ? "Toplam Ciro Hedefi (Tüm)" : "Toplam Ciro Hedefiniz"}
-            </span>
-            <h3 className="text-2xl font-bold text-slate-800 dark:text-slate-100 font-sans">
-              {formatUSD(totalRevenue)}
-            </h3>
-          </div>
-          <div className="h-10 w-10 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <DollarSign className="h-5 w-5" />
-          </div>
-        </div>
-
-        {/* Total GP */}
-        <div className="bg-white dark:bg-slate-900 p-5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider font-sans">
-              {user?.role === "DIREKTOR" ? "Toplam GP Hedefi (Tüm)" : "Toplam GP Hedefiniz"}
-            </span>
-            <h3 className="text-2xl font-bold text-slate-800 dark:text-slate-100 font-sans">
-              {formatUSD(totalGP)}
-            </h3>
-          </div>
-          <div className="h-10 w-10 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <TrendingUp className="h-5 w-5" />
-          </div>
-        </div>
-
-        {/* Total GP% */}
-        <div className="bg-white dark:bg-slate-900 p-5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider font-sans">
-              Ortalama GP Oranı
-            </span>
-            <h3 className="text-2xl font-bold text-slate-800 dark:text-slate-100 font-sans">
-              {totalGPPercent.toFixed(1)}%
-            </h3>
-          </div>
-          <div className="h-10 w-10 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <Percent className="h-5 w-5" />
-          </div>
-        </div>
+      {/* Hedef girişi tamamlanmamış marka sayısı daha önce hiçbir yerde
+          görünmüyordu; kartlar artık tutarın yanında bu bağlamı da taşıyor. */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <ValueTile
+          label={user?.role === "DIREKTOR" ? "Toplam Ciro Hedefi" : "Toplam Ciro Hedefiniz"}
+          value={formatUSD(totalRevenue)}
+          icon={DollarSign}
+          rows={[{ label: "Gösterilen marka", value: `${filteredTargets.length}` }]}
+        />
+        <ValueTile
+          label={user?.role === "DIREKTOR" ? "Toplam GP Hedefi" : "Toplam GP Hedefiniz"}
+          value={formatUSD(totalGP)}
+          icon={TrendingUp}
+          rows={[
+            // Bu sayfadaki GP% hedefin kendisidir; kendisiyle karşılaştırılamaz.
+            { label: "Ortalama GP oranı", value: formatPercent(totalGPPercent) },
+          ]}
+        />
+        <ValueTile
+          label="Hedef Girişi"
+          value={`${enteredTargetCount}/${filteredTargets.length}`}
+          icon={Percent}
+          rows={[
+            {
+              label: "Girilmemiş",
+              value: `${missingTargetCount}`,
+              status: missingTargetCount > 0 ? "crit" : "good",
+            },
+          ]}
+        />
       </div>
 
       {/* Targets Table */}
@@ -654,8 +628,11 @@ export default function TargetsPage() {
                       </TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.revenue)}</TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.gp)}</TableCell>
-                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-800 dark:text-emerald-300">
-                        {formatPercent(group.revenue, group.gp)}
+                      <TableCell className="text-right font-mono text-sm font-extrabold tabular-nums">
+                        <GpPercentCell
+                          value={group.revenue > 0 ? (group.gp / group.revenue) * 100 : 0}
+                          revenue={group.revenue}
+                        />
                       </TableCell>
                       <TableCell className="text-center text-slate-500 font-sans text-[11px]">
                         {formatUpdatedAt(group.latestUpdatedAt)}
@@ -673,8 +650,11 @@ export default function TargetsPage() {
                           </TableCell>
                           <TableCell className="text-right font-mono text-xs">{formatUSD(row.revenue)}</TableCell>
                           <TableCell className="text-right font-mono text-xs">{formatUSD(row.gp)}</TableCell>
-                          <TableCell className="text-right font-mono text-xs font-semibold text-emerald-800 dark:text-emerald-400">
-                            {formatPercent(row.revenue, row.gp)}
+                          <TableCell className="text-right font-mono text-xs font-semibold tabular-nums">
+                            <GpPercentCell
+                              value={row.revenue > 0 ? (row.gp / row.revenue) * 100 : 0}
+                              revenue={row.revenue}
+                            />
                           </TableCell>
                           <TableCell className="text-center text-slate-500 font-sans text-[11px]">
                             {formatUpdatedAt(row.updatedAt)}
