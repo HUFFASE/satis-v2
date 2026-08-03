@@ -5,14 +5,33 @@ import prisma from "@/lib/prisma";
 import { getAccessibleVendorIds, assertVendorAccess } from "@/lib/scope";
 import { ensureFiscalPeriod } from "@/lib/fiscal-db";
 import { writeAuditLog } from "@/lib/audit";
+import { monthlyTriples, round2, sumTriple, type MonthlyTriple } from "@/lib/monthly";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import * as XLSX from "xlsx";
 
+const nonNegative = z.number().min(0);
+
+/**
+ * Hedef artık aylık girilir; çeyrek toplamı (revenue/gp) bu üçlülerden
+ * türetilir. Böylece "aylık toplam çeyreğe eşit mi" diye ayrıca doğrulamak
+ * gerekmez — tutarsızlık temsil edilemez hale gelir.
+ */
 const upsertTargetSchema = z.object({
-  revenue: z.number().min(0, "Revenue hedefi sıfırdan küçük olamaz."),
-  gp: z.number().min(0, "GP hedefi sıfırdan küçük olamaz."),
+  revenueM: z.tuple([nonNegative, nonNegative, nonNegative], {
+    message: "Aylık ciro hedefleri sıfırdan küçük olamaz.",
+  }),
+  gpM: z.tuple([nonNegative, nonNegative, nonNegative], {
+    message: "Aylık GP hedefleri sıfırdan küçük olamaz.",
+  }),
 });
+
+/** Hedef girişi yalnızca direktörlere açıktır. */
+function assertDirektor(user: { role?: string | null }) {
+  if (user.role !== "DIREKTOR") {
+    throw new Error("Hedef girişi yalnızca direktörler tarafından yapılabilir.");
+  }
+}
 
 const MAX_IMPORT_ROWS = 5000;
 const MAX_IMPORT_FILE_SIZE = 5 * 1024 * 1024;
@@ -22,9 +41,17 @@ interface ParsedTargetImportRow {
   vendor: string;
   fiscalYear: number;
   quarter: number;
+  /** Çeyrek toplamı — aylık moddaysa aylardan türetilir. */
   revenue: number;
   gp: number;
+  /** Aylık kırılım; eski (çeyreklik) şablonla yüklendiğinde null. */
+  revenueM: MonthlyTriple | null;
+  gpM: MonthlyTriple | null;
 }
+
+/** Aylık şablon başlıkları. Eski `Revenue`/`GP` de geriye dönük kabul edilir. */
+const MONTHLY_REVENUE_HEADERS = ["Revenue M1", "Revenue M2", "Revenue M3"] as const;
+const MONTHLY_GP_HEADERS = ["GP M1", "GP M2", "GP M3"] as const;
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (!(error instanceof Error)) return fallback;
@@ -104,8 +131,11 @@ function parseTargetImportRows(
       const quarterText = getCellText(row, "Quarter");
       const revenueText = getCellText(row, "Revenue");
       const gpText = getCellText(row, "GP");
+      const monthlyRevenueText = MONTHLY_REVENUE_HEADERS.map((h) => getCellText(row, h));
+      const monthlyGpText = MONTHLY_GP_HEADERS.map((h) => getCellText(row, h));
+      const hasAnyMonthly = [...monthlyRevenueText, ...monthlyGpText].some((t) => t !== "");
 
-      if (!vendor && !quarterText && !revenueText && !gpText) {
+      if (!vendor && !quarterText && !revenueText && !gpText && !hasAnyMonthly) {
         return null;
       }
 
@@ -114,17 +144,51 @@ function parseTargetImportRows(
       }
 
       const { fiscalYear, quarter } = parseQuarterValue(quarterText, fallbackFiscalYear, fallbackQuarter);
+
+      // Aylık mod: altı alanın hepsi zorunlu, çeyrek toplamı türetilir.
+      if (hasAnyMonthly) {
+        const eksik = [...MONTHLY_REVENUE_HEADERS, ...MONTHLY_GP_HEADERS].filter(
+          (h) => getCellText(row, h) === "",
+        );
+        if (eksik.length > 0) {
+          throw new Error(
+            `${rowNumber}. satırda aylık kırılım eksik. Boş sütunlar: ${eksik.join(", ")}. Aylık yüklemede altı alanın da dolu olması gerekir.`,
+          );
+        }
+
+        const revenueM = MONTHLY_REVENUE_HEADERS.map((h, i) =>
+          round2(parseImportNumber(monthlyRevenueText[i], h, rowNumber)),
+        ) as MonthlyTriple;
+        const gpM = MONTHLY_GP_HEADERS.map((h, i) =>
+          round2(parseImportNumber(monthlyGpText[i], h, rowNumber)),
+        ) as MonthlyTriple;
+        const revenue = sumTriple(revenueM);
+        const gp = sumTriple(gpM);
+
+        // Eski çeyrek sütunları da doldurulmuşsa çelişki olmamalı.
+        if (revenueText !== "") {
+          const beyan = parseImportNumber(revenueText, "Revenue", rowNumber);
+          if (Math.abs(beyan - revenue) > 0.01) {
+            throw new Error(
+              `${rowNumber}. satırda Revenue (${beyan}) aylık toplamla (${revenue}) uyuşmuyor.`,
+            );
+          }
+        }
+        if (gpText !== "") {
+          const beyan = parseImportNumber(gpText, "GP", rowNumber);
+          if (Math.abs(beyan - gp) > 0.01) {
+            throw new Error(`${rowNumber}. satırda GP (${beyan}) aylık toplamla (${gp}) uyuşmuyor.`);
+          }
+        }
+
+        return { rowNumber, vendor, fiscalYear, quarter, revenue, gp, revenueM, gpM };
+      }
+
+      // Eski mod: yalnızca çeyrek toplamı; aylık kolonlara dokunulmaz.
       const revenue = parseImportNumber(revenueText, "Revenue", rowNumber);
       const gp = parseImportNumber(gpText, "GP", rowNumber);
 
-      return {
-        rowNumber,
-        vendor,
-        fiscalYear,
-        quarter,
-        revenue,
-        gp,
-      };
+      return { rowNumber, vendor, fiscalYear, quarter, revenue, gp, revenueM: null, gpM: null };
     })
     .filter((row): row is ParsedTargetImportRow => row !== null);
 }
@@ -180,6 +244,9 @@ export async function getTargets(fiscalYear: number, quarter: number) {
 
   return vendors.map((b) => {
     const target = targetMap.get(b.id);
+    // Aylık alanlar `null` döner — çeyrek toplamındaki "yoksa 0" kuralı buraya
+    // KOPYALANMAMALI, yoksa "girilmemiş" ile "sıfır" ayırt edilemez.
+    const monthly = monthlyTriples(target);
     return {
       vendorId: b.id,
       vendorName: b.name,
@@ -187,6 +254,8 @@ export async function getTargets(fiscalYear: number, quarter: number) {
       managerName: b.manager?.name ?? null,
       revenue: target ? Number(target.revenue) : 0,
       gp: target ? Number(target.gp) : 0,
+      revenueM: monthly?.revenue ?? null,
+      gpM: monthly?.gp ?? null,
       updatedAt: target ? target.updatedAt : null,
       isPeriodLocked: period.isLocked,
     };
@@ -200,8 +269,8 @@ export async function upsertTarget(
   vendorId: string,
   fiscalYear: number,
   quarter: number,
-  revenueInput: number,
-  gpInput: number
+  revenueMonthly: MonthlyTriple,
+  gpMonthly: MonthlyTriple
 ) {
   const session = await auth();
   if (!session?.user) {
@@ -210,18 +279,23 @@ export async function upsertTarget(
 
   // 1. Enforce Server-Side Scoping Protection
   try {
+    assertDirektor(session.user);
     await assertVendorAccess(session.user, vendorId);
   } catch (err: unknown) {
     return { success: false, error: getErrorMessage(err, "Vendor yetkisi doğrulanamadı.") };
   }
 
   // 2. Validate Input Metrics
-  const validation = upsertTargetSchema.safeParse({ revenue: revenueInput, gp: gpInput });
+  const validation = upsertTargetSchema.safeParse({ revenueM: revenueMonthly, gpM: gpMonthly });
   if (!validation.success) {
     return { success: false, error: validation.error.issues[0].message };
   }
 
-  const { revenue, gp } = validation.data;
+  const revenueM = validation.data.revenueM.map(round2) as MonthlyTriple;
+  const gpM = validation.data.gpM.map(round2) as MonthlyTriple;
+  // Çeyrek toplamı aylardan türetilir — tutarsızlık temsil edilemez.
+  const revenue = sumTriple(revenueM);
+  const gp = sumTriple(gpM);
 
   // 3. Resolve Period and Verify Locking
   const period = await ensureFiscalPeriod(fiscalYear, quarter);
@@ -253,25 +327,51 @@ export async function upsertTarget(
     update: {
       revenue,
       gp,
+      revenueM1: revenueM[0],
+      revenueM2: revenueM[1],
+      revenueM3: revenueM[2],
+      gpM1: gpM[0],
+      gpM2: gpM[1],
+      gpM3: gpM[2],
     },
     create: {
       vendorId,
       fiscalPeriodId: period.id,
       revenue,
       gp,
+      revenueM1: revenueM[0],
+      revenueM2: revenueM[1],
+      revenueM3: revenueM[2],
+      gpM1: gpM[0],
+      gpM2: gpM[1],
+      gpM3: gpM[2],
     },
   });
 
-  // 6. Write to AuditLog
+  // 6. Write to AuditLog — Target'ın tek geçmiş kaydı burasıdır, aylık
+  // kırılım da yazılmalı yoksa eski değerler geri alınamaz.
+  const existingMonthly = monthlyTriples(existing);
   await writeAuditLog({
     userId: session.user.id,
     action: existing ? "UPDATE_TARGET" : "CREATE_TARGET",
     entityType: "Target",
     entityId: target.id,
     oldValue: existing
-      ? { revenue: Number(existing.revenue), gp: Number(existing.gp), fiscalPeriodId: period.id }
+      ? {
+          revenue: Number(existing.revenue),
+          gp: Number(existing.gp),
+          revenueM: existingMonthly?.revenue ?? null,
+          gpM: existingMonthly?.gp ?? null,
+          fiscalPeriodId: period.id,
+        }
       : null,
-    newValue: { revenue: Number(target.revenue), gp: Number(target.gp), fiscalPeriodId: period.id },
+    newValue: {
+      revenue,
+      gp,
+      revenueM,
+      gpM,
+      fiscalPeriodId: period.id,
+    },
   });
 
   revalidatePath("/targets");
@@ -290,6 +390,12 @@ export async function importTargetsFromXls(
   const session = await auth();
   if (!session?.user) {
     return { success: false, error: "Oturum açık değil." };
+  }
+
+  try {
+    assertDirektor(session.user);
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Yetki doğrulanamadı.") };
   }
 
   const file = formData.get("file");
@@ -358,6 +464,8 @@ export async function importTargetsFromXls(
         fiscalPeriodId: string;
         revenue: number;
         gp: number;
+        revenueM: MonthlyTriple | null;
+        gpM: MonthlyTriple | null;
         rowNumber: number;
       }
     >();
@@ -384,6 +492,8 @@ export async function importTargetsFromXls(
         fiscalPeriodId: period.id,
         revenue: row.revenue,
         gp: row.gp,
+        revenueM: row.revenueM,
+        gpM: row.gpM,
         rowNumber: row.rowNumber,
       });
     }
@@ -398,15 +508,33 @@ export async function importTargetsFromXls(
               fiscalPeriodId: target.fiscalPeriodId,
             },
           },
+          // Aylık kolonlar yalnızca aylık şablonla yüklendiğinde yazılır;
+          // eski şablonla yüklemede mevcut kırılıma dokunulmaz.
           update: {
             revenue: target.revenue,
             gp: target.gp,
+            ...(target.revenueM && target.gpM
+              ? {
+                  revenueM1: target.revenueM[0],
+                  revenueM2: target.revenueM[1],
+                  revenueM3: target.revenueM[2],
+                  gpM1: target.gpM[0],
+                  gpM2: target.gpM[1],
+                  gpM3: target.gpM[2],
+                }
+              : {}),
           },
           create: {
             vendorId: target.vendorId,
             fiscalPeriodId: target.fiscalPeriodId,
             revenue: target.revenue,
             gp: target.gp,
+            revenueM1: target.revenueM?.[0] ?? null,
+            revenueM2: target.revenueM?.[1] ?? null,
+            revenueM3: target.revenueM?.[2] ?? null,
+            gpM1: target.gpM?.[0] ?? null,
+            gpM2: target.gpM?.[1] ?? null,
+            gpM3: target.gpM?.[2] ?? null,
           },
         });
       }

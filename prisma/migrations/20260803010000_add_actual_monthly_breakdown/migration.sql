@@ -1,0 +1,15 @@
+-- Actual: aylık invoiced/backlog × NSB/GP kırılımı (M1/M2/M3).
+-- Çeyrek toplamları (invoiced, backlog) import sırasında NSB aylık toplamlarından türetilir.
+
+ALTER TABLE "Actual" ADD COLUMN IF NOT EXISTS "invoicedNsbM1" DECIMAL(18,2);
+ALTER TABLE "Actual" ADD COLUMN IF NOT EXISTS "invoicedNsbM2" DECIMAL(18,2);
+ALTER TABLE "Actual" ADD COLUMN IF NOT EXISTS "invoicedNsbM3" DECIMAL(18,2);
+ALTER TABLE "Actual" ADD COLUMN IF NOT EXISTS "invoicedGpM1" DECIMAL(18,2);
+ALTER TABLE "Actual" ADD COLUMN IF NOT EXISTS "invoicedGpM2" DECIMAL(18,2);
+ALTER TABLE "Actual" ADD COLUMN IF NOT EXISTS "invoicedGpM3" DECIMAL(18,2);
+ALTER TABLE "Actual" ADD COLUMN IF NOT EXISTS "backlogNsbM1" DECIMAL(18,2);
+ALTER TABLE "Actual" ADD COLUMN IF NOT EXISTS "backlogNsbM2" DECIMAL(18,2);
+ALTER TABLE "Actual" ADD COLUMN IF NOT EXISTS "backlogNsbM3" DECIMAL(18,2);
+ALTER TABLE "Actual" ADD COLUMN IF NOT EXISTS "backlogGpM1" DECIMAL(18,2);
+ALTER TABLE "Actual" ADD COLUMN IF NOT EXISTS "backlogGpM2" DECIMAL(18,2);
+ALTER TABLE "Actual" ADD COLUMN IF NOT EXISTS "backlogGpM3" DECIMAL(18,2);

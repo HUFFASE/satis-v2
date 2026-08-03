@@ -38,9 +38,7 @@ import {
   ChevronDown,
   ChevronRight,
   Clock3,
-  Copy,
   DollarSign,
-  Edit2,
   FileSpreadsheet,
   History,
   Loader2,
@@ -58,19 +56,16 @@ import { MultiSelectFilter, FilterOption } from "@/components/ui/multi-select-fi
 import { formatCompactUSD, formatPercent, formatSignedPoints, formatUSD } from "@/components/viz/format";
 import { AchievementCell, GpPercentCell, STATUS_META, StatusValue, getGpStatus } from "@/components/viz/status";
 import { AchievementTile, ValueTile } from "@/components/viz/tiles";
+import { CARD_HOVER_SHADOW } from "@/components/viz/card-shell";
 import { TrendCard, TrendMeasure } from "@/components/viz/trend-chart";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 import {
-  copyPreviousWeekForecastsForManager,
   getActiveForecasts,
   getForecastVersions,
   getManagerScorecardsAction,
   getVendorScorecardsAction,
   getSessionUser,
   getWeeklyForecastTrend,
-  importForecastFromXls,
-  inspectForecastWorkbook,
-  submitForecast,
   uploadCrmExcelAction,
 } from "./actions";
 
@@ -150,19 +145,8 @@ interface ManagerForecastGroup {
   latestSubmittedAt: Date | string | null;
 }
 
-interface ForecastImportVendorOption {
-  id: string;
-  name: string;
-}
 
-interface ForecastImportInspectResult {
-  sheetCount: number;
-  matchedCount: number;
-  unmatchedSheets: string[];
-  vendors: ForecastImportVendorOption[];
-}
 
-const SKIP_FORECAST_SHEET_VALUE = "__skip__";
 type ForecastSortKey =
   | "managerName"
   | "targetRevenue"
@@ -192,28 +176,9 @@ export default function ForecastInputPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [expandedManagers, setExpandedManagers] = useState<Record<string, boolean>>({});
 
-  const [selectedForecast, setSelectedForecast] = useState<ForecastRow | null>(null);
-  const [revenueInput, setRevenueInput] = useState("0");
-  const [gpInput, setGpInput] = useState("0");
-  const [noteInput, setNoteInput] = useState("");
   const [viewWeekNumber, setViewWeekNumber] = useState<number | "active">("active");
   const [weeklyTrend, setWeeklyTrend] = useState<{ weekNumber: number; revenue: number; gp: number; count: number }[]>([]);
-  const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isBulkUploadModalOpen, setIsBulkUploadModalOpen] = useState(false);
-  const [bulkFile, setBulkFile] = useState<File | null>(null);
-  const [bulkFileName, setBulkFileName] = useState("");
-  const [isBulkInspecting, setIsBulkInspecting] = useState(false);
-  const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
-  const [bulkInspectResult, setBulkInspectResult] = useState<ForecastImportInspectResult | null>(null);
-  const [sheetMappings, setSheetMappings] = useState<Record<string, string>>({});
-  const [bulkWeekNumber, setBulkWeekNumber] = useState<number>(currentContext.weekInQuarter);
 
-  const handleOpenBulkModal = () => {
-    setBulkWeekNumber(currentContext.weekInQuarter);
-    setIsBulkUploadModalOpen(true);
-  };
-  const [copyingManagerId, setCopyingManagerId] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<ForecastSortKey>("managerName");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
 
@@ -425,12 +390,6 @@ export default function ForecastInputPage() {
     ? `${currentContext.weekInQuarter}. Hafta`
     : `Aktif dönem FY${currentContext.fiscalYear} - Q${currentContext.quarter}`;
 
-  const liveRevenue = parseFloat(revenueInput);
-  const liveGP = parseFloat(gpInput);
-  const liveGPPercent = Number.isFinite(liveRevenue) && liveRevenue > 0 && Number.isFinite(liveGP)
-    ? (liveGP / liveRevenue) * 100
-    : 0;
-
   const managerGroups = useMemo<ManagerForecastGroup[]>(() => {
     const groupMap = new Map<string, ManagerForecastGroup>();
 
@@ -537,102 +496,6 @@ export default function ForecastInputPage() {
     }));
   };
 
-  const handleSelectBulkFile = async (file: File | undefined) => {
-    setBulkFile(file ?? null);
-    setBulkFileName(file?.name ?? "");
-    setBulkInspectResult(null);
-    setSheetMappings({});
-
-    if (!file) return;
-
-    setIsBulkInspecting(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const result = await inspectForecastWorkbook(formData);
-
-      if (!result.success) {
-        toast.error(result.error || "Excel dosyası okunamadı.");
-        setBulkFile(null);
-        setBulkFileName("");
-        return;
-      }
-
-      const inspectResult = {
-        sheetCount: result.sheetCount ?? 0,
-        matchedCount: result.matchedCount ?? 0,
-        unmatchedSheets: result.unmatchedSheets ?? [],
-        vendors: result.vendors ?? [],
-      };
-
-      setBulkInspectResult(inspectResult);
-      setSheetMappings(
-        Object.fromEntries(inspectResult.unmatchedSheets.map((sheetName) => [sheetName, ""]))
-      );
-
-      if (inspectResult.unmatchedSheets.length === 0) {
-        toast.success(`${inspectResult.sheetCount} sheet sistemdeki markalarla eşleşti.`);
-      }
-    } catch (err: unknown) {
-      toast.error(getErrorMessage(err, "Excel dosyası okunurken hata oluştu."));
-      setBulkFile(null);
-      setBulkFileName("");
-    } finally {
-      setIsBulkInspecting(false);
-    }
-  };
-
-  const handleBulkImportSubmit = async () => {
-    if (!bulkFile || !bulkInspectResult) return;
-
-    const unmatchedSheets = bulkInspectResult.unmatchedSheets;
-    const missingMappings = unmatchedSheets.filter((sheetName) => !sheetMappings[sheetName]);
-
-    if (missingMappings.length > 0) {
-      toast.error("Lütfen eşleşmeyen tüm sheetler için marka seçiniz.");
-      return;
-    }
-
-    setIsBulkSubmitting(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", bulkFile);
-      formData.append(
-        "mappings",
-        JSON.stringify(
-          unmatchedSheets.map((sheetName) => ({
-            sheetName,
-            vendorId: sheetMappings[sheetName],
-          }))
-        )
-      );
-
-      const result = await importForecastFromXls(formData, fiscalYear, quarter, bulkWeekNumber);
-      if (!result.success) {
-        toast.error(result.error || "Forecast XLS yükleme sırasında hata oluştu.");
-        return;
-      }
-
-      toast.success(`${result.importedCount} forecast kaydı yüklendi.`);
-      if (result.mergedSheetCount && result.mergedSheetCount > 0) {
-        toast.info(`${result.mergedSheetCount} sheet aynı markada birleştirildi.`);
-      }
-      if (result.skippedSheetCount && result.skippedSheetCount > 0) {
-        toast.info(`${result.skippedSheetCount} sheet atlandı.`);
-      }
-      setIsBulkUploadModalOpen(false);
-      setBulkFile(null);
-      setBulkFileName("");
-      setBulkInspectResult(null);
-      setSheetMappings({});
-      await loadForecasts();
-    } catch (err: unknown) {
-      toast.error(getErrorMessage(err, "Forecast XLS yükleme sırasında hata oluştu."));
-    } finally {
-      setIsBulkSubmitting(false);
-    }
-  };
-
   const handleCrmUploadSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!crmFile) {
@@ -662,57 +525,6 @@ export default function ForecastInputPage() {
     }
   };
 
-  const handleOpenSubmit = (row: ForecastRow) => {
-    setSelectedForecast(row);
-    setRevenueInput(row.revenue.toString());
-    setGpInput(row.gp.toString());
-    setNoteInput(row.note ?? "");
-    setIsSubmitModalOpen(true);
-  };
-
-  const handleSubmitForecast = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!selectedForecast) return;
-
-    const revenue = parseFloat(revenueInput);
-    const gp = parseFloat(gpInput);
-
-    if (!Number.isFinite(revenue) || revenue < 0 || !Number.isFinite(gp) || gp < 0) {
-      toast.error("Lütfen geçerli pozitif sayılar giriniz.");
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const targetWeek = viewWeekNumber === "active" ? undefined : viewWeekNumber;
-      const result = await submitForecast(
-        selectedForecast.vendorId,
-        fiscalYear,
-        quarter,
-        revenue,
-        gp,
-        targetWeek,
-        noteInput
-      );
-      if (!result.success) {
-        toast.error(result.error || "Forecast kaydedilemedi.");
-        return;
-      }
-
-      toast.success(
-        result.updatedExistingWeek
-          ? `${result.weekNumber}. hafta forecast'i güncellendi.`
-          : `${result.weekNumber}. hafta forecast'i aktif olarak kaydedildi.`
-      );
-      setIsSubmitModalOpen(false);
-      await loadForecasts();
-    } catch (err: unknown) {
-      toast.error(getErrorMessage(err, "Forecast kaydedilirken hata oluştu."));
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   const handleOpenHistory = async (row: ForecastRow) => {
     setHistoryVendor(row);
     setIsHistoryOpen(true);
@@ -725,34 +537,6 @@ export default function ForecastInputPage() {
       setVersions([]);
     } finally {
       setIsHistoryLoading(false);
-    }
-  };
-
-  const handleCopyPreviousWeek = async (managerId: string) => {
-    setCopyingManagerId(managerId);
-    try {
-      const result = await copyPreviousWeekForecastsForManager(
-        managerId === "unassigned" ? null : managerId,
-        fiscalYear,
-        quarter
-      );
-
-      if (!result.success) {
-        toast.error(result.error || "Önceki hafta forecast'i kopyalanamadı.");
-        return;
-      }
-
-      toast.success(
-        `${result.previousWeekNumber}. hafta forecast'i ${result.weekNumber}. haftaya kopyalandı. ${result.copiedCount} marka güncellendi.`
-      );
-      if (result.skippedCount && result.skippedCount > 0) {
-        toast.info(`${result.skippedCount} markada önceki hafta forecast'i olmadığı için işlem yapılmadı.`);
-      }
-      await loadForecasts();
-    } catch (err: unknown) {
-      toast.error(getErrorMessage(err, "Önceki hafta forecast'i kopyalanırken hata oluştu."));
-    } finally {
-      setCopyingManagerId(null);
     }
   };
 
@@ -841,9 +625,29 @@ export default function ForecastInputPage() {
         </div>
       </div>
 
+      {/* Forecast girişi Haftalık Detay Formu'na taşındı — bu sayfa artık
+          salt-okunur özet ve geçmiş görünümüdür. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 text-sm text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-300">
+        <FileSpreadsheet className="h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-400" />
+        <span>
+          Forecast girişi artık <strong>Haftalık Detay Formu</strong> üzerinden yapılıyor. Bu sayfa
+          özet ve geçmiş görünümüdür.
+        </span>
+        <Link href="/weekly-forecast" className="ml-auto">
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 gap-1.5 bg-[#1F3A2E] px-3 text-xs font-bold text-white hover:bg-[#2E5A43]"
+          >
+            Haftalık Detay Formu
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Button>
+        </Link>
+      </div>
+
       {!isSelectedCurrentPeriod && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-800 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-300">
-          Bu seçili dönem aktif çeyrek değil. Forecast girişi sadece aktif çeyrekte yapılabilir.
+          Bu seçili dönem aktif çeyrek değil.
         </div>
       )}
 
@@ -940,7 +744,7 @@ export default function ForecastInputPage() {
 
       {/* CRM & Scorecard Executive Banner */}
       {scorecards.length > 0 && (
-        <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 shadow-sm dark:border-emerald-900/50 dark:bg-emerald-950/20">
+        <div className={`space-y-3 rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 dark:border-emerald-900/50 dark:bg-emerald-950/20 ${CARD_HOVER_SHADOW}`}>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2.5">
               <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#1F3A2E] text-white shadow-xs">
@@ -980,19 +784,19 @@ export default function ForecastInputPage() {
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-1">
-            <div className="rounded-lg border border-slate-200/80 bg-white/90 p-3 shadow-xs dark:border-slate-800 dark:bg-slate-950/40">
+            <div className={`rounded-lg border border-slate-200/80 bg-white/90 p-3 dark:border-slate-800 dark:bg-slate-950/40 ${CARD_HOVER_SHADOW}`}>
               <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Topl. Ağırlıklı CRM</span>
               <span className="font-mono text-base font-extrabold text-emerald-800 dark:text-emerald-300">
                 {formatUSD(scorecards.reduce((acc, s) => acc + s.weightedCrmPipeline, 0))}
               </span>
             </div>
-            <div className="rounded-lg border border-slate-200/80 bg-white/90 p-3 shadow-xs dark:border-slate-800 dark:bg-slate-950/40">
+            <div className={`rounded-lg border border-slate-200/80 bg-white/90 p-3 dark:border-slate-800 dark:bg-slate-950/40 ${CARD_HOVER_SHADOW}`}>
               <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Ham CRM Pipeline</span>
               <span className="font-mono text-base font-bold text-slate-700 dark:text-slate-300">
                 {formatUSD(scorecards.reduce((acc, s) => acc + s.rawCrmPipeline, 0))}
               </span>
             </div>
-            <div className="rounded-lg border border-slate-200/80 bg-white/90 p-3 shadow-xs dark:border-slate-800 dark:bg-slate-950/40">
+            <div className={`rounded-lg border border-slate-200/80 bg-white/90 p-3 dark:border-slate-800 dark:bg-slate-950/40 ${CARD_HOVER_SHADOW}`}>
               <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Günü Geçmiş Açık İşler</span>
               <StatusValue
                 className="font-mono text-base font-bold"
@@ -1000,7 +804,7 @@ export default function ForecastInputPage() {
                 value={`${scorecards.reduce((acc, s) => acc + s.overdueCount, 0)} Açık İş`}
               />
             </div>
-            <div className="rounded-lg border border-slate-200/80 bg-white/90 p-3 shadow-xs dark:border-slate-800 dark:bg-slate-950/40">
+            <div className={`rounded-lg border border-slate-200/80 bg-white/90 p-3 dark:border-slate-800 dark:bg-slate-950/40 ${CARD_HOVER_SHADOW}`}>
               <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Ort. CRM Sağlık Skoru</span>
               <span className="font-mono text-base font-extrabold text-emerald-700 dark:text-emerald-400">
                 %{Math.round(scorecards.reduce((acc, s) => acc + s.crmHealthScore, 0) / (scorecards.length || 1))}
@@ -1067,7 +871,6 @@ export default function ForecastInputPage() {
                 const groupRevenueAchievement =
                   group.targetRevenue > 0 ? (group.revenue / group.targetRevenue) * 100 : 0;
                 const groupGPAchievement = group.targetGp > 0 ? (group.gp / group.targetGp) * 100 : 0;
-                const isCopyingThisManager = copyingManagerId === group.id;
                 const sc = scorecards.find(
                   (s) =>
                     s.managerName.toUpperCase() === group.managerName.toUpperCase() ||
@@ -1120,22 +923,6 @@ export default function ForecastInputPage() {
                               </span>
                             </span>
                           </button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            title="Önceki hafta forecast'ini mevcut haftaya kopyala"
-                            aria-label={`${group.managerName} için önceki hafta forecast'ini mevcut haftaya kopyala`}
-                            onClick={() => void handleCopyPreviousWeek(group.id)}
-                            disabled={!isSelectedCurrentPeriod || isPeriodLocked || isCopyingThisManager}
-                            className="h-6 w-6 shrink-0 text-slate-500 hover:bg-emerald-50 hover:text-emerald-800 disabled:opacity-40 dark:hover:bg-emerald-950/30 dark:hover:text-emerald-300"
-                          >
-                            {isCopyingThisManager ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Copy className="h-3.5 w-3.5" />
-                            )}
-                          </Button>
                         </div>
                       </TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">
@@ -1299,17 +1086,19 @@ export default function ForecastInputPage() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleOpenSubmit(row)}
-                                disabled={isPeriodLocked}
-                                className="h-8 border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-emerald-800"
-                              >
-                                {isPeriodLocked ? <Lock className="h-3.5 w-3.5" /> : <Edit2 className="h-3.5 w-3.5" />}
-                                {row.hasForecast ? "Güncelle" : "Forecast Gir"}
-                              </Button>
+                              {/* Forecast girişi Haftalık Detay Formu'na taşındı;
+                                  düğme kaldırılmak yerine oraya yönlendiriyor. */}
+                              <Link href="/weekly-forecast">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-emerald-800"
+                                >
+                                  <ArrowRight className="h-3.5 w-3.5" />
+                                  Formda Aç
+                                </Button>
+                              </Link>
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -1381,277 +1170,7 @@ export default function ForecastInputPage() {
           CRM Excel Yükle (Scorecard)
         </Button>
 
-        <Button
-          type="button"
-          onClick={handleOpenBulkModal}
-          className="h-9 bg-[#2E5A43] px-4 text-white hover:bg-[#1F3A2E] shadow-sm"
-        >
-          <Upload className="h-4 w-4" />
-          XLS ile Bulk Yükle
-        </Button>
       </div>
-
-      <Dialog
-        open={isBulkUploadModalOpen}
-        onOpenChange={(open) => {
-          setIsBulkUploadModalOpen(open);
-          if (!open) {
-            setBulkFile(null);
-            setBulkFileName("");
-            setBulkInspectResult(null);
-            setSheetMappings({});
-          }
-        }}
-      >
-        <DialogContent className="sm:max-w-lg border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-          <DialogHeader>
-            <DialogTitle className="font-serif text-xl font-bold text-[#1F3A2E] dark:text-emerald-400">
-              Forecast XLS Bulk Yükleme
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500">
-              FY{fiscalYear} - Q{quarter} dönemi için seçilen haftaya forecast verilerini yükleyin.
-            </DialogDescription>
-          </DialogHeader>
-
-          {/* Week Selection for Forecast Bulk Upload */}
-          <div className="space-y-1.5 rounded-lg border border-emerald-200/60 bg-emerald-50/50 p-3.5 dark:border-emerald-900/40 dark:bg-emerald-950/20">
-            <Label htmlFor="forecast-bulk-week-select" className="text-xs font-semibold text-slate-700 dark:text-slate-300 font-sans">
-              Yüklenecek Hafta Seçimi:
-            </Label>
-            <div className="flex items-center gap-2">
-              <Select
-                value={bulkWeekNumber.toString()}
-                onValueChange={(val) => { if (val) setBulkWeekNumber(parseInt(val)); }}
-              >
-                <SelectTrigger id="forecast-bulk-week-select" className="h-9 border-slate-200 bg-white text-xs font-semibold focus:outline-none dark:border-slate-800 dark:bg-slate-900">
-                  <SelectValue placeholder="Hafta Seçin" />
-                </SelectTrigger>
-                <SelectContent className="bg-white border-slate-200">
-                  {Array.from({ length: 13 }, (_, i) => i + 1).map((w) => (
-                    <SelectItem key={w} value={w.toString()} className="text-xs font-sans">
-                      Hafta {w}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Badge className="bg-[#1F3A2E] text-white shrink-0 px-2.5 py-1 text-xs">
-                FY{fiscalYear} Q{quarter} - {bulkWeekNumber}. Hafta
-              </Badge>
-            </div>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Yüklediğiniz Excel satırları <strong>{bulkWeekNumber}. Hafta</strong> forecast verisi olarak kaydedilecektir.
-            </p>
-          </div>
-
-          <div
-            className="rounded-lg border-2 border-dashed border-slate-200 bg-slate-50/70 p-8 text-center dark:border-slate-800 dark:bg-slate-950/30"
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault();
-              void handleSelectBulkFile(event.dataTransfer.files?.[0]);
-            }}
-          >
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
-              <FileSpreadsheet className="h-6 w-6" />
-            </div>
-            <div className="mt-4 space-y-1">
-              <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                Dosyayı buraya sürükleyin
-              </p>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                veya bilgisayarınızdan XLS / XLSX / XLSB dosyası seçin.
-              </p>
-            </div>
-
-            <div className="mt-5 flex flex-col items-center gap-3">
-              <Label
-                htmlFor="forecast-bulk-file"
-                className="inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-              >
-                <Upload className="h-4 w-4" />
-                Dosya Seç
-              </Label>
-              <Input
-                id="forecast-bulk-file"
-                type="file"
-                accept=".xls,.xlsx,.xlsb"
-                onChange={(event) => void handleSelectBulkFile(event.target.files?.[0])}
-                className="sr-only"
-              />
-              {bulkFileName && (
-                <span className="inline-flex max-w-full items-center gap-1.5 rounded-md bg-white px-2.5 py-1 text-xs font-medium text-slate-600 shadow-sm dark:bg-slate-900 dark:text-slate-300">
-                  <FileSpreadsheet className="h-3.5 w-3.5 shrink-0 text-emerald-700 dark:text-emerald-400" />
-                  <span className="truncate">{bulkFileName}</span>
-                </span>
-              )}
-              {isBulkInspecting && (
-                <span className="inline-flex items-center gap-2 text-xs font-medium text-slate-500">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-700" />
-                  Sheet isimleri okunuyor...
-                </span>
-              )}
-            </div>
-          </div>
-
-          {bulkInspectResult && (
-            <div className="space-y-3 rounded-lg border border-slate-100 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-950/20">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-                <span>
-                  {bulkInspectResult.sheetCount} sheet bulundu, {bulkInspectResult.matchedCount} sheet otomatik eşleşti.
-                </span>
-                <span className="font-medium text-slate-700 dark:text-slate-300">
-                  {bulkInspectResult.unmatchedSheets.length} eşleşmeyen
-                </span>
-              </div>
-
-              {bulkInspectResult.unmatchedSheets.length > 0 && (
-                <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
-                  {bulkInspectResult.unmatchedSheets.map((sheetName) => (
-                    <div
-                      key={sheetName}
-                      className="grid gap-2 rounded-md border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-900 sm:grid-cols-[1fr_220px] sm:items-center"
-                    >
-                      <span className="truncate text-xs font-semibold text-slate-700 dark:text-slate-200">
-                        {sheetName}
-                      </span>
-                      <Select
-                        value={sheetMappings[sheetName] ?? ""}
-                        onValueChange={(value) =>
-                          setSheetMappings((current) => ({
-                            ...current,
-                            [sheetName]: value ?? "",
-                          }))
-                        }
-                      >
-                        <SelectTrigger className="h-8 border-slate-200 text-xs">
-                          <SelectValue placeholder="Marka seç" />
-                        </SelectTrigger>
-                        <SelectContent className="max-h-72 bg-white border-slate-200">
-                          <SelectItem value={SKIP_FORECAST_SHEET_VALUE} className="text-xs text-slate-500">
-                            Atla
-                          </SelectItem>
-                          {bulkInspectResult.vendors.map((vendor) => (
-                            <SelectItem key={vendor.id} value={vendor.id} className="text-xs">
-                              {vendor.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIsBulkUploadModalOpen(false)}
-              disabled={isBulkSubmitting}
-              className="border-slate-200 text-slate-700 hover:bg-slate-50"
-            >
-              İptal
-            </Button>
-            <Button
-              type="button"
-              onClick={handleBulkImportSubmit}
-              disabled={
-                !bulkFile ||
-                isBulkInspecting ||
-                isBulkSubmitting ||
-                !bulkInspectResult ||
-                bulkInspectResult.unmatchedSheets.some((sheetName) => !sheetMappings[sheetName])
-              }
-              className="flex items-center gap-2 bg-[#2E5A43] text-white hover:bg-[#1F3A2E]"
-            >
-              {isBulkSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
-              Yükle
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={isSubmitModalOpen} onOpenChange={setIsSubmitModalOpen}>
-        <DialogContent className="sm:max-w-md border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-          <DialogHeader>
-            <DialogTitle className="font-serif text-xl font-bold text-[#1F3A2E] dark:text-emerald-400">
-              Forecast {selectedForecast?.hasForecast ? "Güncelle" : "Gir"}
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500">
-              <strong className="text-slate-800 dark:text-slate-200">{selectedForecast?.vendorName}</strong> markası için FY{fiscalYear} - Q{quarter}, {currentContext.weekInQuarter}. hafta forecast değeri.
-            </DialogDescription>
-          </DialogHeader>
-
-          <form onSubmit={handleSubmitForecast} className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="forecast-revenue">Revenue (USD)</Label>
-              <div className="relative">
-                <span className="absolute left-3 top-2.5 text-sm text-slate-400">$</span>
-                <Input
-                  id="forecast-revenue"
-                  type="number"
-                  step="any"
-                  value={revenueInput}
-                  onChange={(event) => setRevenueInput(event.target.value)}
-                  disabled={isSubmitting}
-                  className="border-slate-200 pl-7 focus-visible:ring-emerald-700"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="forecast-gp">GP (USD)</Label>
-              <div className="relative">
-                <span className="absolute left-3 top-2.5 text-sm text-slate-400">$</span>
-                <Input
-                  id="forecast-gp"
-                  type="number"
-                  step="any"
-                  value={gpInput}
-                  onChange={(event) => setGpInput(event.target.value)}
-                  disabled={isSubmitting}
-                  className="border-slate-200 pl-7 focus-visible:ring-emerald-700"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="forecast-note" className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 font-sans">
-                <MessageSquare className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                Forecast Notu (Opsiyonel)
-              </Label>
-              <textarea
-                id="forecast-note"
-                rows={3}
-                placeholder="Bu üretici forecast'i için özel bir açıklama veya not girin..."
-                value={noteInput}
-                onChange={(event) => setNoteInput(event.target.value)}
-                disabled={isSubmitting}
-                className="w-full rounded-md border border-slate-200 bg-white p-2.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
-              />
-            </div>
-
-            <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 dark:bg-slate-800/40">
-              <span className="text-xs font-semibold uppercase text-slate-500">Hesaplanan GP%</span>
-              <span className={`font-mono text-sm font-bold ${STATUS_META[getGpStatus(liveGPPercent, selectedForecast?.targetGpPercent ?? 0)].ink}`}>
-                {formatPercent(liveGPPercent)}
-              </span>
-            </div>
-
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setIsSubmitModalOpen(false)} disabled={isSubmitting}>
-                İptal
-              </Button>
-              <Button type="submit" disabled={isSubmitting} className="bg-[#2E5A43] text-white hover:bg-[#1F3A2E]">
-                {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
-                Kaydet
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
         <DialogContent className="sm:max-w-3xl border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">

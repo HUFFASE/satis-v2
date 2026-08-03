@@ -46,6 +46,7 @@ model User {
   importLogs     ImportLog[]
   auditLogs      AuditLog[]
   scorecards     SalesManagerScorecard[]
+  weeklyForecastSheets WeeklyForecastSheet[]
 }
 
 model Vendor {
@@ -66,6 +67,7 @@ model Vendor {
   actuals   Actual[]
   closings           Closing[]
   vendorScorecards   VendorScorecard[]
+  weeklyForecastSheets WeeklyForecastSheet[]
 
   @@index([managerId])
 }
@@ -112,6 +114,7 @@ model FiscalPeriod {
   closings         Closing[]
   scorecards       SalesManagerScorecard[]
   vendorScorecards VendorScorecard[]
+  weeklyForecastSheets WeeklyForecastSheet[]
 
   @@unique([fiscalYear, quarter])
 }
@@ -142,8 +145,18 @@ model Target {
   id             String   @id @default(uuid())
   vendorId       String
   fiscalPeriodId String
+  /// Çeyrek toplamı. Anlamı DEĞİŞMEDİ — tüm raporlar bunu okumaya devam eder.
+  /// Aylık kırılım girildiğinde revenue = revenueM1+M2+M3 olur.
   revenue        Decimal  @db.Decimal(18, 2)
   gp             Decimal  @db.Decimal(18, 2)
+  /// Aylık kırılım. null = henüz girilmemiş (0 ile karıştırılmamalı).
+  /// Ya altısı birden dolu olur ya da altısı birden null.
+  revenueM1      Decimal? @db.Decimal(18, 2)
+  revenueM2      Decimal? @db.Decimal(18, 2)
+  revenueM3      Decimal? @db.Decimal(18, 2)
+  gpM1           Decimal? @db.Decimal(18, 2)
+  gpM2           Decimal? @db.Decimal(18, 2)
+  gpM3           Decimal? @db.Decimal(18, 2)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -159,8 +172,23 @@ model Actual {
   vendorId       String
   fiscalPeriodId String
   weekNumber     Int
-  backlog        Decimal  @db.Decimal(18, 2)
+  /// Çeyrek Invoiced NSB toplamı (= invoicedNsbM1+M2+M3).
   invoiced       Decimal  @db.Decimal(18, 2)
+  /// Çeyrek Backlog NSB toplamı (= backlogNsbM1+M2+M3).
+  backlog        Decimal  @db.Decimal(18, 2)
+  /// Aylık kırılım — null = henüz import edilmemiş (0 ile karıştırılmamalı).
+  invoicedNsbM1  Decimal? @db.Decimal(18, 2)
+  invoicedNsbM2  Decimal? @db.Decimal(18, 2)
+  invoicedNsbM3  Decimal? @db.Decimal(18, 2)
+  invoicedGpM1   Decimal? @db.Decimal(18, 2)
+  invoicedGpM2   Decimal? @db.Decimal(18, 2)
+  invoicedGpM3   Decimal? @db.Decimal(18, 2)
+  backlogNsbM1   Decimal? @db.Decimal(18, 2)
+  backlogNsbM2   Decimal? @db.Decimal(18, 2)
+  backlogNsbM3   Decimal? @db.Decimal(18, 2)
+  backlogGpM1    Decimal? @db.Decimal(18, 2)
+  backlogGpM2    Decimal? @db.Decimal(18, 2)
+  backlogGpM3    Decimal? @db.Decimal(18, 2)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -175,8 +203,16 @@ model Closing {
   id             String   @id @default(uuid())
   vendorId       String
   fiscalPeriodId String
+  /// Çeyrek toplamı. Anlamı DEĞİŞMEDİ — tüm raporlar bunu okumaya devam eder.
   revenue        Decimal  @db.Decimal(18, 2)
   gp             Decimal  @db.Decimal(18, 2)
+  /// Aylık kırılım. null = henüz girilmemiş (0 ile karıştırılmamalı).
+  revenueM1      Decimal? @db.Decimal(18, 2)
+  revenueM2      Decimal? @db.Decimal(18, 2)
+  revenueM3      Decimal? @db.Decimal(18, 2)
+  gpM1           Decimal? @db.Decimal(18, 2)
+  gpM2           Decimal? @db.Decimal(18, 2)
+  gpM3           Decimal? @db.Decimal(18, 2)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -185,6 +221,34 @@ model Closing {
 
   @@unique([vendorId, fiscalPeriodId])
   @@index([fiscalPeriodId])
+}
+
+/// Excel "BU DataApp Weekly Forecast report" formunun web karşılığı.
+/// Bir vendor'ın belirli bir hafta için doldurduğu tüm girilebilir hücreler
+/// `inputs` alanında saklanır; şeması src/lib/weekly-forecast/schema.ts.
+/// Türetilmiş her değer (Q toplamları, achievement, GP% vb.) okuma anında
+/// src/lib/weekly-forecast/calc.ts tarafından hesaplanır, saklanmaz.
+model WeeklyForecastSheet {
+  id             String   @id @default(uuid())
+  vendorId       String
+  fiscalPeriodId String
+  weekNumber     Int
+  inputs         Json
+  /// Aynı (vendor, çeyrek) için geçerli olan hafta. Forecast.isActive ile aynı
+  /// semantik: kaydedilen hafta true olur, diğer haftalar false'a düşer.
+  isActive       Boolean  @default(true)
+  updatedById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  vendor       Vendor       @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  fiscalPeriod FiscalPeriod @relation(fields: [fiscalPeriodId], references: [id], onDelete: Restrict)
+  updatedBy    User?        @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([vendorId, fiscalPeriodId, weekNumber])
+  @@index([fiscalPeriodId, weekNumber])
+  @@index([vendorId, fiscalPeriodId, isActive])
+  @@index([updatedById])
 }
 
 model SalesManagerScorecard {

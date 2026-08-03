@@ -138,3 +138,88 @@ export function formatFiscalPeriod(fiscalYear: number, quarter: number): string 
 export function getCurrentFiscalContext(): FiscalContext {
   return getFiscalContext(new Date());
 }
+
+const TURKISH_MONTHS = [
+  "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+  "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
+] as const;
+
+export interface QuarterMonth {
+  /** 1, 2 veya 3 — çeyrek içindeki sıra (M1/M2/M3) */
+  index: 1 | 2 | 3;
+  /** Takvim ayı, 0-tabanlı (Date.getMonth() ile aynı) */
+  monthIndex: number;
+  /** Takvim yılı — Q1'in M1'i bir önceki yılın aralığıdır */
+  calendarYear: number;
+  /** "Haziran 2026" */
+  label: string;
+  /** Ayın ilk günü, yerel gece yarısı */
+  startDate: Date;
+  /** Ertesi ayın ilk günü — ay "bitti" sayılma eşiği */
+  endExclusive: Date;
+}
+
+/**
+ * Çeyreğin üç takvim ayını döndürür.
+ *
+ * Çeyrekler her zaman ayın 1'inde başlayan temiz 3 takvim ayıdır, bu yüzden
+ * M(n) = başlangıç ayı + (n-1). Q1'in aralık yıl-dönüşünü `new Date(y, m+n, 1)`
+ * kendiliğinden çözer (ay taşması yılı artırır).
+ */
+export function getQuarterMonths(fiscalYear: number, quarter: number): QuarterMonth[] {
+  const { startDate } = getQuarterDateRange(fiscalYear, quarter);
+  const y = startDate.getFullYear();
+  const m = startDate.getMonth();
+
+  return [1, 2, 3].map((n) => {
+    const start = new Date(y, m + (n - 1), 1, 0, 0, 0, 0);
+    return {
+      index: n as 1 | 2 | 3,
+      monthIndex: start.getMonth(),
+      calendarYear: start.getFullYear(),
+      label: `${TURKISH_MONTHS[start.getMonth()]} ${start.getFullYear()}`,
+      startDate: start,
+      endExclusive: new Date(y, m + n, 1, 0, 0, 0, 0),
+    };
+  });
+}
+
+/**
+ * Çeyreğin üç ayı için "bu ay kapandı mı" bilgisi (M1, M2, M3 sırasıyla).
+ *
+ * Ay takvim olarak bittiği anda kapanır; kapanan ayın hücreleri haftalık
+ * formda salt-okunur olur. Haftalar aylara hizalı olmadığı için (13 hafta /
+ * 3 ay) bu bilgi hafta numarasından TÜRETİLEMEZ, takvim tarihinden hesaplanır.
+ */
+export function getClosedMonths(
+  fiscalYear: number,
+  quarter: number,
+  now: Date = new Date(),
+): [boolean, boolean, boolean] {
+  const months = getQuarterMonths(fiscalYear, quarter);
+  return months.map((m) => now.getTime() >= m.endExclusive.getTime()) as [boolean, boolean, boolean];
+}
+
+/** Ay etiketleri, ör. ["Haziran 2026", "Temmuz 2026", "Ağustos 2026"] */
+export function getQuarterMonthLabels(fiscalYear: number, quarter: number): [string, string, string] {
+  return getQuarterMonths(fiscalYear, quarter).map((m) => m.label) as [string, string, string];
+}
+
+/**
+ * Bir tarihin çeyrek içindeki ay sırası (0/1/2). Çeyrek dışındaysa null.
+ * CRM fırsatlarının fatura tarihini M1/M2/M3'e eşlemek için kullanılır.
+ */
+export function getMonthIndexInQuarter(
+  date: Date,
+  fiscalYear: number,
+  quarter: number,
+): 0 | 1 | 2 | null {
+  const months = getQuarterMonths(fiscalYear, quarter);
+  const t = date.getTime();
+  for (const m of months) {
+    if (t >= m.startDate.getTime() && t < m.endExclusive.getTime()) {
+      return (m.index - 1) as 0 | 1 | 2;
+    }
+  }
+  return null;
+}

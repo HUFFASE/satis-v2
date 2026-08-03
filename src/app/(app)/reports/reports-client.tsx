@@ -50,6 +50,7 @@ import {
   getGpStatus,
 } from "@/components/viz/status";
 import { AchievementTile, ComparisonBar, EmptyState, Meter, ValueTile } from "@/components/viz/tiles";
+import { KPI_TILE_SHELL } from "@/components/viz/card-shell";
 import { TrendCard, TrendMeasure } from "@/components/viz/trend-chart";
 
 type ReportsData = Awaited<ReturnType<typeof getReportsData>>;
@@ -201,7 +202,7 @@ function PerformanceTile({ label, value, description }: { label: string; value: 
   const { ink, Icon: StatusIcon, label: statusLabel } = STATUS_META[status];
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <div className={KPI_TILE_SHELL}>
       <div className="flex items-start justify-between gap-3">
         <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span>
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
@@ -816,7 +817,7 @@ export default function ReportsClient({ initialData }: ReportsClientProps) {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-        <section className="print-block rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <section className={`print-block ${KPI_TILE_SHELL}`}>
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h2 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">{labels.compareTitle}</h2>
@@ -857,7 +858,7 @@ export default function ReportsClient({ initialData }: ReportsClientProps) {
           )}
         </section>
 
-        <section className="print-block rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <section className={`print-block ${KPI_TILE_SHELL}`}>
           <div className="mb-4">
             <h2 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">Forecast Performansı</h2>
             <p className="text-xs text-slate-500">Satış müdürü bazında {labels.performance.toLowerCase()}.</p>
@@ -1019,7 +1020,7 @@ export default function ReportsClient({ initialData }: ReportsClientProps) {
         </div>
       </section>
 
-      <section className="print-block rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <section className={`print-block ${KPI_TILE_SHELL}`}>
         <div className="mb-4 flex items-center gap-2">
           <AlertTriangle className="h-5 w-5 text-amber-600" aria-hidden="true" />
           <div>

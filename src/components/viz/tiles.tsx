@@ -2,6 +2,7 @@ import React from "react";
 import { Inbox } from "lucide-react";
 import { StatusKey, STATUS_META, getAchievementStatus, StatusValue } from "./status";
 import { formatPercent, formatSignedUSD, formatUSD } from "./format";
+import { KPI_TILE_SHELL } from "./card-shell";
 
 /**
  * Hedefe göre gerçekleşmeyi gösteren ölçer. Ölçek max(100, değer) olduğu için
@@ -38,8 +39,7 @@ export function Meter({ value, status }: { value: number; status: StatusKey }) {
   );
 }
 
-const TILE_SHELL =
-  "print-block rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900";
+const TILE_SHELL = `print-block ${KPI_TILE_SHELL}`;
 const TILE_ICON =
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300";
 

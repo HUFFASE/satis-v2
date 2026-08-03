@@ -29,7 +29,12 @@ export interface CrmAuditDeal {
   partnerCurrency: string;
   winRate: string;
   invoicingWinRate: string;
-  multiplier: number;
+  /**
+   * @deprecated Canlı `crmAuditJson` verisinde bu alan YOK — eski kayıtlar
+   * onsuz yazılmış. Kovayı `bucketKeyFromRates(winRate, invoicingWinRate)` ile
+   * yeniden hesaplayın, buradan okumayın.
+   */
+  multiplier?: number;
   dateStr: string;
   issues: ("OVERDUE" | "CURRENCY_CONFLICT" | "ZERO_INVOICING" | "UNASSIGNED_BRAND")[];
 }
@@ -81,6 +86,70 @@ export function calculateOpportunityMultiplier(winRateStr: string, invoicingStr:
   }
 
   return 0.0;
+}
+
+/** Haftalık formdaki win-rate kovalarının anahtarları. */
+export type CrmBucketKey = "w100i100" | "w100i50" | "w75i100" | "w75i50" | "w50i50" | "w25";
+
+/**
+ * CRM fırsatını haftalık formdaki kovaya eşler.
+ *
+ * `calculateOpportunityMultiplier` ile AYNI kuralları kullanır ama daha
+ * ayrıntılıdır: multiplier %100/%100 ile %100/%50'yi ayırt edemez (ikisi de
+ * 1.0), kova anahtarı ayırır. İkisinin tutarlılığı tests/crm.test.ts'te
+ * kilitlenmiştir.
+ *
+ * Eşleşmeyen fırsat için null döner — TAHMİN EDİLMEZ, "kovasız" sayılır.
+ */
+export function bucketKeyFromRates(winRateStr: string, invoicingStr: string): CrmBucketKey | null {
+  const win = String(winRateStr || "").trim();
+  const inv = String(invoicingStr || "").trim();
+
+  if (win === "%100") {
+    if (inv.startsWith("100")) return "w100i100";
+    if (inv.startsWith("50")) return "w100i50";
+    return null;
+  }
+  if (win === "%75") {
+    if (inv.startsWith("100")) return "w75i100";
+    if (inv.startsWith("50")) return "w75i50";
+    return null;
+  }
+  if (win === "%50") {
+    if (inv.startsWith("50") || inv.startsWith("100")) return "w50i50";
+    return null;
+  }
+  if (win === "%25") return "w25";
+  return null;
+}
+
+/**
+ * Çelişkili oran girişi mi?
+ *
+ * `%100` kazanma oranı "iş kesin alındı" demek; faturalanma oranının da 100
+ * ya da 50 olması gerekir. `%100 + %0` mantıksal olarak çelişir ve CRM'de
+ * hatalı giriştir — karşılaştırmaya alınmaz, ayrıca sayılıp raporlanır.
+ *
+ * Dikkat: `%75 + %0` ve `%50 + %0` HATA DEĞİLDİR; bunlar gerçekten sıfır
+ * olasılıklı fırsatlardır, yalnızca formda karşılık gelen kovaları yoktur.
+ */
+export function isInvalidRateCombo(winRateStr: string, invoicingStr: string): boolean {
+  const win = String(winRateStr || "").trim();
+  const inv = String(invoicingStr || "").trim();
+  if (win !== "%100") return false;
+  return !inv.startsWith("100") && !inv.startsWith("50");
+}
+
+/**
+ * Fırsat TL mi? Sistem TL'yi hiçbir yerde USD'ye çevirmez, ayrı tutar.
+ * Parser'daki ile aynı yüklem — ayrışmasın diye tek yerde.
+ */
+export function isTryCurrency(currency: string, partnerCurrency?: string): boolean {
+  const test = (s: string) => {
+    const u = String(s || "").toUpperCase();
+    return u.includes("TL") || u.includes("TRY");
+  };
+  return test(currency) || test(partnerCurrency ?? "");
 }
 
 export function parseTDSynnexCrmExcel(

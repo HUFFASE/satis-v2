@@ -8,22 +8,16 @@ import { writeAuditLog } from "@/lib/audit";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import * as XLSX from "xlsx";
+import { parseMonthlyDetailsRows } from "@/lib/backlog/parse-monthly-details";
+import { round2 } from "@/lib/monthly";
 
 const upsertActualSchema = z.object({
-  backlog: z.number().min(0, "Revenue değeri sıfırdan küçük olamaz."),
-  invoiced: z.number().min(0, "GP değeri sıfırdan küçük olamaz."),
+  backlog: z.number().min(0, "Backlog değeri sıfırdan küçük olamaz."),
+  invoiced: z.number().min(0, "Invoiced değeri sıfırdan küçük olamaz."),
 });
 
 const MAX_IMPORT_ROWS = 5000;
 const MAX_IMPORT_FILE_SIZE = 5 * 1024 * 1024;
-
-interface ParsedBacklogImportRow {
-  rowNumber: number;
-  managerName: string;
-  vendor: string;
-  backlog: number;
-  invoiced: number;
-}
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (!(error instanceof Error)) return fallback;
@@ -70,106 +64,6 @@ function resolveLookupValue<T extends { id: string }>(
   );
 
   return uniqueCandidates.length === 1 ? uniqueCandidates[0] : null;
-}
-
-function getCellText(row: unknown[], columnIndex: number) {
-  const value = row[columnIndex];
-  return value === undefined || value === null ? "" : String(value).trim();
-}
-
-function parseImportNumber(value: string, fieldName: string, rowNumber: number) {
-  const trimmed = value.trim();
-
-  if (!trimmed || /^[-—–]+$/.test(trimmed)) {
-    return 0;
-  }
-
-  const withoutCurrency = trimmed
-    .replace(/\((.*)\)/, "-$1")
-    .replace(/[$€£₺]/g, "")
-    .replace(/\s/g, "");
-  const lastComma = withoutCurrency.lastIndexOf(",");
-  const lastDot = withoutCurrency.lastIndexOf(".");
-  let normalized = withoutCurrency;
-
-  if (lastComma > -1 && lastDot > -1) {
-    normalized =
-      lastComma > lastDot
-        ? withoutCurrency.replace(/\./g, "").replace(",", ".")
-        : withoutCurrency.replace(/,/g, "");
-  } else if (lastComma > -1) {
-    const fractionLength = withoutCurrency.length - lastComma - 1;
-    normalized =
-      fractionLength === 3
-        ? withoutCurrency.replace(/,/g, "")
-        : withoutCurrency.replace(",", ".");
-  }
-
-  const parsed = Number(normalized);
-
-  if (!Number.isFinite(parsed)) {
-    throw new Error(`${rowNumber}. satırda ${fieldName} değeri geçerli değil: "${value}".`);
-  }
-
-  return parsed;
-}
-
-function isBacklogImportHeaderRow(managerName: string, vendor: string, revenue: string, gp: string) {
-  const normalizedManager = normalizeLookupValue(managerName);
-  const normalizedVendor = normalizeLookupValue(vendor);
-  const normalizedRevenue = normalizeLookupValue(revenue);
-  const normalizedGp = normalizeLookupValue(gp);
-
-  return (
-    normalizedManager.includes("SATIS") ||
-    normalizedManager.includes("SALES") ||
-    normalizedVendor.includes("VENDOR") ||
-    normalizedRevenue.includes("REVENUE") ||
-    normalizedGp === "GP" ||
-    normalizedGp.includes("GROSS_PROFIT")
-  );
-}
-
-function parseBacklogImportRows(rows: unknown[][]) {
-  if (rows.length > MAX_IMPORT_ROWS + 20) {
-    throw new Error(`Tek seferde en fazla ${MAX_IMPORT_ROWS} satır yüklenebilir.`);
-  }
-
-  const parsedRows: ParsedBacklogImportRow[] = [];
-
-  rows.forEach((row, index) => {
-    const rowNumber = index + 1;
-    const managerName = getCellText(row, 3);
-    const vendor = getCellText(row, 4);
-    const revenue = getCellText(row, 20);
-    const gp = getCellText(row, 21);
-
-    if (!managerName && !vendor && !revenue && !gp) {
-      return;
-    }
-
-    if (isBacklogImportHeaderRow(managerName, vendor, revenue, gp)) {
-      return;
-    }
-
-    if (!managerName || !vendor) {
-      return;
-    }
-
-    parsedRows.push({
-      rowNumber,
-      managerName,
-      vendor,
-      backlog: parseImportNumber(revenue, "Revenue", rowNumber),
-      invoiced: parseImportNumber(gp, "GP", rowNumber),
-    });
-  });
-
-  if (parsedRows.length > MAX_IMPORT_ROWS) {
-    throw new Error(`Tek seferde en fazla ${MAX_IMPORT_ROWS} satır yüklenebilir.`);
-  }
-
-  return parsedRows;
 }
 
 function makeImportKey(vendorId: string, fiscalPeriodId: string, weekNumber: number) {
@@ -363,9 +257,8 @@ export async function upsertActual(
 }
 
 /**
- * Imports Revenue/GP rows from a source XLS/XLSX file.
- * Source columns:
- * D = Sales manager, E = Vendor, U = Revenue, V = GP.
+ * Imports backlog rows from Monthly Details sheet.
+ * H+ columns: invoiced/backlog × NSB/GP × M1/M2/M3. U/V toplam kolonları okunmaz.
  */
 export async function importBacklogFromXls(
   formData: FormData,
@@ -418,10 +311,14 @@ export async function importBacklogFromXls(
       defval: "",
       raw: false,
     });
-    const parsedRows = parseBacklogImportRows(sheetRows);
+    const parsedRows = parseMonthlyDetailsRows(sheetRows, fiscalYear, quarter);
 
     if (parsedRows.length === 0) {
-      return { success: false, error: "Yüklenecek Revenue/GP satırı bulunamadı." };
+      return { success: false, error: "Yüklenecek backlog satırı bulunamadı." };
+    }
+
+    if (parsedRows.length > MAX_IMPORT_ROWS) {
+      return { success: false, error: `Tek seferde en fazla ${MAX_IMPORT_ROWS} satır yüklenebilir.` };
     }
 
     const vendors = await prisma.vendor.findMany({
@@ -477,8 +374,20 @@ export async function importBacklogFromXls(
       string,
       {
         vendorId: string;
-        backlog: number;
         invoiced: number;
+        backlog: number;
+        invoicedNsbM1: number;
+        invoicedNsbM2: number;
+        invoicedNsbM3: number;
+        invoicedGpM1: number;
+        invoicedGpM2: number;
+        invoicedGpM3: number;
+        backlogNsbM1: number;
+        backlogNsbM2: number;
+        backlogNsbM3: number;
+        backlogGpM1: number;
+        backlogGpM2: number;
+        backlogGpM3: number;
       }
     >();
     const skippedVendors = new Set<string>();
@@ -493,10 +402,31 @@ export async function importBacklogFromXls(
       const importKey = makeImportKey(vendor.id, period.id, weekNumber);
       const existingRow = importRows.get(importKey);
 
+      const mergeTriple = (
+        current: [number, number, number] | undefined,
+        next: [number, number, number],
+      ): [number, number, number] => [
+        round2((current?.[0] ?? 0) + next[0]),
+        round2((current?.[1] ?? 0) + next[1]),
+        round2((current?.[2] ?? 0) + next[2]),
+      ];
+
       importRows.set(importKey, {
         vendorId: vendor.id,
-        backlog: (existingRow?.backlog ?? 0) + row.backlog,
-        invoiced: (existingRow?.invoiced ?? 0) + row.invoiced,
+        invoiced: round2((existingRow?.invoiced ?? 0) + row.invoicedNsbQuarter),
+        backlog: round2((existingRow?.backlog ?? 0) + row.backlogNsbQuarter),
+        invoicedNsbM1: round2((existingRow?.invoicedNsbM1 ?? 0) + row.invoicedNsb[0]),
+        invoicedNsbM2: round2((existingRow?.invoicedNsbM2 ?? 0) + row.invoicedNsb[1]),
+        invoicedNsbM3: round2((existingRow?.invoicedNsbM3 ?? 0) + row.invoicedNsb[2]),
+        invoicedGpM1: round2((existingRow?.invoicedGpM1 ?? 0) + row.invoicedGp[0]),
+        invoicedGpM2: round2((existingRow?.invoicedGpM2 ?? 0) + row.invoicedGp[1]),
+        invoicedGpM3: round2((existingRow?.invoicedGpM3 ?? 0) + row.invoicedGp[2]),
+        backlogNsbM1: round2((existingRow?.backlogNsbM1 ?? 0) + row.backlogNsb[0]),
+        backlogNsbM2: round2((existingRow?.backlogNsbM2 ?? 0) + row.backlogNsb[1]),
+        backlogNsbM3: round2((existingRow?.backlogNsbM3 ?? 0) + row.backlogNsb[2]),
+        backlogGpM1: round2((existingRow?.backlogGpM1 ?? 0) + row.backlogGp[0]),
+        backlogGpM2: round2((existingRow?.backlogGpM2 ?? 0) + row.backlogGp[1]),
+        backlogGpM3: round2((existingRow?.backlogGpM3 ?? 0) + row.backlogGp[2]),
       });
     }
 
@@ -526,15 +456,39 @@ export async function importBacklogFromXls(
             },
           },
           update: {
-            backlog: row.backlog,
             invoiced: row.invoiced,
+            backlog: row.backlog,
+            invoicedNsbM1: row.invoicedNsbM1,
+            invoicedNsbM2: row.invoicedNsbM2,
+            invoicedNsbM3: row.invoicedNsbM3,
+            invoicedGpM1: row.invoicedGpM1,
+            invoicedGpM2: row.invoicedGpM2,
+            invoicedGpM3: row.invoicedGpM3,
+            backlogNsbM1: row.backlogNsbM1,
+            backlogNsbM2: row.backlogNsbM2,
+            backlogNsbM3: row.backlogNsbM3,
+            backlogGpM1: row.backlogGpM1,
+            backlogGpM2: row.backlogGpM2,
+            backlogGpM3: row.backlogGpM3,
           },
           create: {
             vendorId: row.vendorId,
             fiscalPeriodId: period.id,
             weekNumber,
-            backlog: row.backlog,
             invoiced: row.invoiced,
+            backlog: row.backlog,
+            invoicedNsbM1: row.invoicedNsbM1,
+            invoicedNsbM2: row.invoicedNsbM2,
+            invoicedNsbM3: row.invoicedNsbM3,
+            invoicedGpM1: row.invoicedGpM1,
+            invoicedGpM2: row.invoicedGpM2,
+            invoicedGpM3: row.invoicedGpM3,
+            backlogNsbM1: row.backlogNsbM1,
+            backlogNsbM2: row.backlogNsbM2,
+            backlogNsbM3: row.backlogNsbM3,
+            backlogGpM1: row.backlogGpM1,
+            backlogGpM2: row.backlogGpM2,
+            backlogGpM3: row.backlogGpM3,
           },
         });
       }

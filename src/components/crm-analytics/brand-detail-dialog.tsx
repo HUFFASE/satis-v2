@@ -12,7 +12,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Search, ArrowUpDown, ArrowUp, ArrowDown, Building2, Coins, Calculator } from "lucide-react";
-import { CrmAuditDeal } from "@/lib/crm/tdsynnex-parser";
+import { CrmAuditDeal, calculateOpportunityMultiplier } from "@/lib/crm/tdsynnex-parser";
+
+/**
+ * Çarpan, kayıtlı JSON'da bulunmuyor (canlı veride `multiplier` alanı yok);
+ * oran metinlerinden hesaplanır — parser ile aynı kural.
+ */
+function dealMultiplier(d: CrmAuditDeal): number {
+  return calculateOpportunityMultiplier(d.winRate, d.invoicingWinRate);
+}
 
 interface BrandDetailDialogProps {
   isOpen: boolean;
@@ -69,8 +77,11 @@ export function BrandDetailDialog({
   // Sorted deals
   const sortedDeals = useMemo(() => {
     return searchFiltered.slice().sort((a, b) => {
-      let aVal: any = (a as any)[sortField];
-      let bVal: any = (b as any)[sortField];
+      // `multiplier` kayıtlı veride bulunmuyor; hesaplanarak sıralanır.
+      let aVal: any =
+        sortField === "multiplier" ? dealMultiplier(a) : (a as any)[sortField];
+      let bVal: any =
+        sortField === "multiplier" ? dealMultiplier(b) : (b as any)[sortField];
 
       if (typeof aVal === "string") {
         aVal = aVal.toLowerCase();
@@ -219,11 +230,11 @@ export function BrandDetailDialog({
                     </TableCell>
                     <TableCell className="text-center font-mono">
                       <Badge variant="outline" className="text-[10px] font-bold border-slate-300 bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200">
-                        x{d.multiplier}
+                        x{dealMultiplier(d)}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right font-mono font-bold text-xs text-emerald-700 dark:text-emerald-400">
-                      {d.currency === "USD" ? formatUSD(d.selling * d.multiplier) : formatTRY(d.selling * d.multiplier)}
+                      {d.currency === "USD" ? formatUSD(d.selling * dealMultiplier(d)) : formatTRY(d.selling * dealMultiplier(d))}
                     </TableCell>
                   </TableRow>
                 ))}

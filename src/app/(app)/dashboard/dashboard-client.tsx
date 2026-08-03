@@ -33,6 +33,7 @@ import {
   getGpStatus,
 } from "@/components/viz/status";
 import { AchievementTile, ComparisonBar, EmptyState, ValueTile } from "@/components/viz/tiles";
+import { KPI_TILE_SHELL } from "@/components/viz/card-shell";
 import { TrendCard, TrendMeasure } from "@/components/viz/trend-chart";
 
 type MetricSet = {
@@ -277,7 +278,7 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
             captionHeader="Kayıt"
           />
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className={KPI_TILE_SHELL}>
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <h3 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">
@@ -465,7 +466,7 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
             )}
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className={KPI_TILE_SHELL}>
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <h3 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">
