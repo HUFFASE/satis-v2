@@ -10,6 +10,7 @@ import {
   getGpStatus,
 } from "@/components/viz/status";
 import { EmptyState } from "@/components/viz/tiles";
+import { CARD_HOVER_SHADOW } from "@/components/viz/card-shell";
 
 function getInitials(name: string) {
   return name
@@ -140,7 +141,7 @@ export function ManagerIdentityCard({
   return (
     <section className="print-block space-y-6">
       {/* Kart sayfada ortalanır ve kimlik kartı oranlarında dar tutulur. */}
-      <div className="mx-auto w-full max-w-xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className={`mx-auto w-full max-w-xl overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 ${CARD_HOVER_SHADOW}`}>
         {/* Belge başlığı bandı */}
         <div className="flex items-center justify-between gap-3 bg-[#1F3A2E] px-4 py-2 text-emerald-50">
           <span className="text-[10px] font-bold uppercase tracking-[0.18em]">

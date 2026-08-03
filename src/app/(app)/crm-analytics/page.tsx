@@ -41,6 +41,7 @@ import {
   WeeklyHygieneTrendItem,
 } from "./actions";
 import { BrandDetailDialog } from "@/components/crm-analytics/brand-detail-dialog";
+import { CARD_HOVER_SHADOW, KPI_TILE_SHELL_XL } from "@/components/viz/card-shell";
 
 function formatUSD(value: number) {
   return new Intl.NumberFormat("en-US", {
@@ -190,7 +191,7 @@ export default function CrmAnalyticsPage() {
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className={KPI_TILE_SHELL_XL}>
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Toplam Ham Pipeline ($)</span>
           <h3 className="mt-1 font-mono text-xl font-bold text-slate-900 dark:text-slate-100">
             {formatUSD(totalRawUSD)}
@@ -198,7 +199,7 @@ export default function CrmAnalyticsPage() {
           <p className="text-[11px] text-slate-400 mt-0.5">{totalDeals} Adet CRM Fırsat Kaydı</p>
         </div>
 
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 shadow-xs dark:border-emerald-900/40 dark:bg-emerald-950/30">
+        <div className={`rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 dark:border-emerald-900/40 dark:bg-emerald-950/30 ${CARD_HOVER_SHADOW}`}>
           <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider block">Ağırlıklı Pipeline ($)</span>
           <h3 className="mt-1 font-mono text-xl font-bold text-emerald-700 dark:text-emerald-300">
             {formatUSD(totalWeightedUSD)}
@@ -207,7 +208,7 @@ export default function CrmAnalyticsPage() {
         </div>
 
         {totalRawTRY > 0 && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 shadow-xs dark:border-amber-900/40 dark:bg-amber-950/40">
+          <div className={`rounded-xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-900/40 dark:bg-amber-950/40 ${CARD_HOVER_SHADOW}`}>
             <span className="text-[10px] font-bold text-amber-800 dark:text-amber-300 uppercase tracking-wider block">TL (TRY) Pipeline</span>
             <h3 className="mt-1 font-mono text-xl font-bold text-amber-900 dark:text-amber-300">
               {formatTRY(totalRawTRY)}
@@ -216,7 +217,7 @@ export default function CrmAnalyticsPage() {
           </div>
         )}
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className={KPI_TILE_SHELL_XL}>
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Ort. CRM Hijyen Skoru</span>
           <h3 className="mt-1 font-mono text-xl font-extrabold text-emerald-700 dark:text-emerald-400 flex items-center gap-2">
             <ShieldCheck className="h-5 w-5 text-emerald-600" /> %{avgCrmHealth}

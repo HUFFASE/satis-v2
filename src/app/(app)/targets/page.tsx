@@ -53,15 +53,19 @@ import { formatPercent, formatUSD } from "@/components/viz/format";
 import { GpPercentCell } from "@/components/viz/status";
 import { ValueTile } from "@/components/viz/tiles";
 import { getTargets, upsertTarget, getSessionUser, importTargetsFromXls } from "./actions";
-import { getCurrentFiscalContext } from "@/lib/fiscal";
+import { getCurrentFiscalContext, getQuarterMonthLabels } from "@/lib/fiscal";
 
 interface TargetRow {
   vendorId: string;
   vendorName: string;
   managerId: string | null;
   managerName: string | null;
+  /** Çeyrek toplamı — aylık kırılım girildiyse onun toplamı. */
   revenue: number;
   gp: number;
+  /** Aylık kırılım; null = henüz girilmemiş (sıfır ile karıştırılmamalı). */
+  revenueM: [number, number, number] | null;
+  gpM: [number, number, number] | null;
   updatedAt: Date | string | null;
   isPeriodLocked: boolean;
 }
@@ -102,11 +106,11 @@ export default function TargetsPage() {
   const [sortKey, setSortKey] = useState<TargetSortKey>("managerName");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
 
-  // Form states
+  // Form states — hedef artık aylık girilir, çeyrek toplamı türetilir.
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [selectedVendor, setSelectedVendor] = useState<TargetRow | null>(null);
-  const [revenueInput, setRevenueInput] = useState<string>("0");
-  const [gpInput, setGpInput] = useState<string>("0");
+  const [revenueMInput, setRevenueMInput] = useState<[string, string, string]>(["0", "0", "0"]);
+  const [gpMInput, setGpMInput] = useState<[string, string, string]>(["0", "0", "0"]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isBulkUploadModalOpen, setIsBulkUploadModalOpen] = useState(false);
   const [bulkFile, setBulkFile] = useState<File | null>(null);
@@ -148,24 +152,55 @@ export default function TargetsPage() {
 
   const handleOpenEdit = (row: TargetRow) => {
     setSelectedVendor(row);
-    setRevenueInput(row.revenue.toString());
-    setGpInput(row.gp.toString());
+    // Aylık kırılım varsa onunla, yoksa boş başlat — çeyrek toplamını üçe
+    // bölmek uydurma dağılım üretirdi.
+    setRevenueMInput(
+      row.revenueM
+        ? (row.revenueM.map(String) as [string, string, string])
+        : ["", "", ""]
+    );
+    setGpMInput(
+      row.gpM ? (row.gpM.map(String) as [string, string, string]) : ["", "", ""]
+    );
     setIsEditModalOpen(true);
   };
+
+  /** Seçili çeyreğin ay adları, ör. Haziran 2026 / Temmuz 2026 / Ağustos 2026 */
+  const monthLabels = getQuarterMonthLabels(fiscalYear, quarter);
+
+  /**
+   * Hedef girişi yalnızca direktörlere açık. Satış müdürleri hedefleri
+   * görmeye devam eder ama düzenleyemez — sunucu tarafı da ayrıca korunuyor.
+   */
+  const isDirektor = user?.role === "DIREKTOR";
+
+  const parseTriple = (input: [string, string, string]) =>
+    input.map((v) => (v.trim() === "" ? NaN : parseFloat(v))) as [number, number, number];
+
+  const revenueMParsed = parseTriple(revenueMInput);
+  const gpMParsed = parseTriple(gpMInput);
+  const revenueMTotal = revenueMParsed.every(Number.isFinite)
+    ? revenueMParsed.reduce((a, b) => a + b, 0)
+    : null;
+  const gpMTotal = gpMParsed.every(Number.isFinite)
+    ? gpMParsed.reduce((a, b) => a + b, 0)
+    : null;
 
   const handleUpsertSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedVendor) return;
 
-    const rev = parseFloat(revenueInput);
-    const gpVal = parseFloat(gpInput);
+    const rev = revenueMParsed;
+    const gpVal = gpMParsed;
 
-    if (isNaN(rev) || rev < 0 || isNaN(gpVal) || gpVal < 0) {
-      toast.error("Lütfen geçerli pozitif sayılar giriniz.");
+    if (!rev.every((v) => Number.isFinite(v) && v >= 0) || !gpVal.every((v) => Number.isFinite(v) && v >= 0)) {
+      toast.error("Altı aylık alanın hepsine geçerli pozitif sayı giriniz.");
       return;
     }
 
-    if (gpVal > rev) {
+    const revTotal = rev.reduce((a, b) => a + b, 0);
+    const gpTotal = gpVal.reduce((a, b) => a + b, 0);
+    if (gpTotal > revTotal) {
       toast.error("GP hedefi, Ciro (Revenue) hedefinden büyük olamaz.");
       return;
     }
@@ -198,12 +233,10 @@ export default function TargetsPage() {
     return value ? new Date(value).toLocaleString("tr-TR") : "Belirlenmemiş";
   };
 
-  // Calculate live values during edits
+  // Calculate live values during edits — aylık toplamlar üzerinden
   const calculateLiveGPPercent = () => {
-    const rev = parseFloat(revenueInput);
-    const gpVal = parseFloat(gpInput);
-    if (isNaN(rev) || isNaN(gpVal) || rev <= 0) return "0.0%";
-    return `${((gpVal / rev) * 100).toFixed(1)}%`;
+    if (revenueMTotal === null || gpMTotal === null || revenueMTotal <= 0) return "0.0%";
+    return `${((gpMTotal / revenueMTotal) * 100).toFixed(1)}%`;
   };
 
   // Multi-select filter states (Satış Müdürü -> Marka)
@@ -349,8 +382,20 @@ export default function TargetsPage() {
   };
 
   const handleDownloadTemplate = () => {
-    const headers = ["Number", "Vendor", "Quarter", "Revenue", "GP"];
-    const sampleRow = ["1", "VENDOR_NAME", `FY${fiscalYear}-Q${quarter}`, "0", "0"];
+    // Aylık şablon. Eski Revenue/GP sütunlu dosyalar da kabul edilmeye devam
+    // eder (geriye dönük), ama yeni şablon aylık kırılım ister.
+    const headers = [
+      "Number",
+      "Vendor",
+      "Quarter",
+      "Revenue M1",
+      "Revenue M2",
+      "Revenue M3",
+      "GP M1",
+      "GP M2",
+      "GP M3",
+    ];
+    const sampleRow = ["1", "VENDOR_NAME", `FY${fiscalYear}-Q${quarter}`, "0", "0", "0", "0", "0", "0"];
     const rows = [headers, sampleRow];
     const tableRows = rows
       .map(
@@ -424,6 +469,8 @@ export default function TargetsPage() {
   };
 
   const isPeriodLocked = targets.length > 0 && targets[0].isPeriodLocked;
+  /** Düzenleme kapalı mı: çeyrek kilitli VEYA kullanıcı direktör değil. */
+  const isReadOnly = isPeriodLocked || !isDirektor;
 
   const fiscalYearsRange = [
     currentContext.fiscalYear - 1,
@@ -661,16 +708,16 @@ export default function TargetsPage() {
                           </TableCell>
                           <TableCell className="text-right">
                             <Button
-                              variant={isPeriodLocked ? "ghost" : "outline"}
+                              variant={isReadOnly ? "ghost" : "outline"}
                               size="sm"
                               onClick={() => handleOpenEdit(row)}
                               className={`h-8 font-sans ${
-                                isPeriodLocked
+                                isReadOnly
                                   ? "text-slate-400 border-transparent hover:bg-transparent"
                                   : "border-slate-200 hover:bg-slate-50 hover:text-emerald-800 text-slate-700"
                               }`}
                             >
-                              {isPeriodLocked ? (
+                              {isReadOnly ? (
                                 <>
                                   <Lock className="h-3.5 w-3.5 mr-1 text-slate-400" />
                                   İncele
@@ -704,7 +751,8 @@ export default function TargetsPage() {
         )}
       </div>
 
-      {/* Bulk XLS Upload */}
+      {/* Bulk XLS Upload — hedef girişi yalnızca direktörlere açık */}
+      {isDirektor && (
       <div className="flex flex-col justify-end gap-2 sm:flex-row">
         <Button
           type="button"
@@ -724,6 +772,7 @@ export default function TargetsPage() {
           XLS ile Bulk Yükle
         </Button>
       </div>
+      )}
 
       {/* Bulk XLS Upload dialog */}
       <Dialog open={isBulkUploadModalOpen} onOpenChange={setIsBulkUploadModalOpen}>
@@ -819,7 +868,7 @@ export default function TargetsPage() {
         <DialogContent className="sm:max-w-md bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
           <DialogHeader>
             <DialogTitle className="font-serif text-[#1F3A2E] dark:text-emerald-400 text-xl font-bold">
-              {isPeriodLocked ? "Hedef Detayları" : "Dönemsel Hedef Belirle"}
+              {isReadOnly ? "Hedef Detayları" : "Dönemsel Hedef Belirle"}
             </DialogTitle>
             <DialogDescription className="text-slate-500 font-sans text-xs">
               <strong className="text-slate-800 dark:text-slate-200 font-sans">{selectedVendor?.vendorName}</strong> vendor kaydı için FY{fiscalYear} - Q{quarter} hedefleri.
@@ -834,46 +883,81 @@ export default function TargetsPage() {
           )}
 
           <form onSubmit={handleUpsertSubmit} className="space-y-4 py-2">
+            {/* Aylık giriş — çeyrek toplamı aylardan türetilir, ayrıca girilmez. */}
             <div className="space-y-1.5">
-              <Label htmlFor="target-rev" className="text-slate-700 dark:text-slate-300 font-medium">Revenue Hedefi (USD)</Label>
-              <div className="relative">
-                <span className="absolute left-3 top-2.5 text-slate-400 text-sm">$</span>
-                <Input
-                  id="target-rev"
-                  type="number"
-                  step="any"
-                  value={revenueInput}
-                  onChange={(e) => setRevenueInput(e.target.value)}
-                  disabled={isSubmitting || isPeriodLocked}
-                  placeholder="0.00"
-                  className="pl-7 border-slate-200 focus-visible:ring-emerald-700 font-sans"
-                />
+              <Label className="text-slate-700 dark:text-slate-300 font-medium">Revenue Hedefi (USD) — aylık</Label>
+              <div className="grid grid-cols-3 gap-2">
+                {monthLabels.map((ay, i) => (
+                  <div key={ay} className="space-y-1">
+                    <span className="block text-[11px] font-medium text-slate-500">{ay}</span>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-2.5 text-slate-400 text-xs">$</span>
+                      <Input
+                        type="number"
+                        step="any"
+                        value={revenueMInput[i]}
+                        onChange={(e) => {
+                          const next = [...revenueMInput] as [string, string, string];
+                          next[i] = e.target.value;
+                          setRevenueMInput(next);
+                        }}
+                        disabled={isSubmitting || isReadOnly}
+                        placeholder="0.00"
+                        className="pl-6 border-slate-200 focus-visible:ring-emerald-700 font-sans text-sm"
+                      />
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="target-gp" className="text-slate-700 dark:text-slate-300 font-medium">GP Hedefi (USD)</Label>
-              <div className="relative">
-                <span className="absolute left-3 top-2.5 text-slate-400 text-sm">$</span>
-                <Input
-                  id="target-gp"
-                  type="number"
-                  step="any"
-                  value={gpInput}
-                  onChange={(e) => setGpInput(e.target.value)}
-                  disabled={isSubmitting || isPeriodLocked}
-                  placeholder="0.00"
-                  className="pl-7 border-slate-200 focus-visible:ring-emerald-700 font-sans"
-                />
+              <Label className="text-slate-700 dark:text-slate-300 font-medium">GP Hedefi (USD) — aylık</Label>
+              <div className="grid grid-cols-3 gap-2">
+                {monthLabels.map((ay, i) => (
+                  <div key={ay} className="space-y-1">
+                    <span className="block text-[11px] font-medium text-slate-500">{ay}</span>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-2.5 text-slate-400 text-xs">$</span>
+                      <Input
+                        type="number"
+                        step="any"
+                        value={gpMInput[i]}
+                        onChange={(e) => {
+                          const next = [...gpMInput] as [string, string, string];
+                          next[i] = e.target.value;
+                          setGpMInput(next);
+                        }}
+                        disabled={isSubmitting || isReadOnly}
+                        placeholder="0.00"
+                        className="pl-6 border-slate-200 focus-visible:ring-emerald-700 font-sans text-sm"
+                      />
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 
-            {/* Live GP% Indicator */}
-            <div className="p-3.5 bg-slate-50 dark:bg-slate-800/40 rounded-lg flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-500 uppercase font-sans">Hesaplanan GP Oranı (%):</span>
-              <span className="font-mono text-sm font-bold text-emerald-800 dark:text-emerald-400">
-                {calculateLiveGPPercent()}
-              </span>
+            {/* Türetilen çeyrek toplamları + GP% */}
+            <div className="space-y-2 rounded-lg bg-slate-50 p-3.5 dark:bg-slate-800/40">
+              <div className="flex items-center justify-between">
+                <span className="font-sans text-xs font-semibold uppercase text-slate-500">Çeyrek Revenue (toplam):</span>
+                <span className="font-mono text-sm font-bold text-emerald-800 dark:text-emerald-400">
+                  {revenueMTotal === null ? "—" : formatUSD(revenueMTotal)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="font-sans text-xs font-semibold uppercase text-slate-500">Çeyrek GP (toplam):</span>
+                <span className="font-mono text-sm font-bold text-emerald-800 dark:text-emerald-400">
+                  {gpMTotal === null ? "—" : formatUSD(gpMTotal)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between border-t border-slate-200 pt-2 dark:border-slate-700">
+                <span className="font-sans text-xs font-semibold uppercase text-slate-500">Hesaplanan GP Oranı (%):</span>
+                <span className="font-mono text-sm font-bold text-emerald-800 dark:text-emerald-400">
+                  {calculateLiveGPPercent()}
+                </span>
+              </div>
             </div>
 
             <DialogFooter className="mt-6">
@@ -884,9 +968,9 @@ export default function TargetsPage() {
                 disabled={isSubmitting}
                 className="border-slate-200 hover:bg-slate-50 text-slate-700"
               >
-                {isPeriodLocked ? "Kapat" : "İptal"}
+                {isReadOnly ? "Kapat" : "İptal"}
               </Button>
-              {!isPeriodLocked && (
+              {!isReadOnly && (
                 <Button
                   type="submit"
                   disabled={isSubmitting}

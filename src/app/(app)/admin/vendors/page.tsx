@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { KPI_TILE_SHELL_SM } from "@/components/viz/card-shell";
 import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -101,7 +102,7 @@ function formatDate(value: Date | string | null) {
 
 function MetricCard({ label, value, subValue }: { label: string; value: string; subValue: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <div className={KPI_TILE_SHELL_SM}>
       <div className="text-[10px] font-extrabold uppercase tracking-wide text-slate-500">{label}</div>
       <div className="mt-1 truncate font-mono text-lg font-extrabold text-slate-950 dark:text-slate-100">{value}</div>
       <div className="mt-0.5 truncate text-[11px] font-medium text-slate-500">{subValue}</div>

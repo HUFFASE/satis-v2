@@ -53,6 +53,8 @@ export default function Topbar({ user }: TopbarProps) {
         return "Kontrol Paneli";
       case "/forecast-input":
         return "Forecast Giriş";
+      case "/weekly-forecast":
+        return "Haftalık Detay Formu";
       case "/forecast-history":
         return "Tahmin Geçmişi";
       case "/targets":

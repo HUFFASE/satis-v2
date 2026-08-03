@@ -25,6 +25,7 @@
 *.pem
 *.db
 import-backup-*.json
+/backups/
 
 # debug
 npm-debug.log*
@@ -43,3 +44,7 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated/prisma
+
+# Local import/source files
+*.xlsx
+*.xlsb

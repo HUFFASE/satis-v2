@@ -52,6 +52,7 @@ import {
 } from "@/app/(app)/forecast-input/actions";
 import { getManagerProfileCards, type ManagerProfileCard } from "./actions";
 import { ManagerIdentityCard } from "@/components/scorecard/manager-identity-card";
+import { CARD_HOVER_SHADOW, KPI_TILE_SHELL_XL } from "@/components/viz/card-shell";
 
 interface ScorecardManagerItem {
   id: string;
@@ -411,7 +412,7 @@ export default function ScorecardPage() {
 
       {/* KPI Cards */}
       <div className={`grid grid-cols-1 sm:grid-cols-2 ${totalTryDealCount > 0 ? "lg:grid-cols-5" : "lg:grid-cols-4"} gap-4`}>
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className={KPI_TILE_SHELL_XL}>
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Topl. Ağırlıklı CRM ($)</span>
           <h3 className="mt-1 font-mono text-xl font-extrabold text-emerald-800 dark:text-emerald-300">
             {formatUSD(totalWeightedPipeline)}
@@ -419,7 +420,7 @@ export default function ScorecardPage() {
           <p className="text-[11px] text-slate-400 mt-0.5">Win rate & Invoicing çarpanlı net değer</p>
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className={KPI_TILE_SHELL_XL}>
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Ham CRM Pipeline ($)</span>
           <h3 className="mt-1 font-mono text-xl font-bold text-slate-700 dark:text-slate-200">
             {formatUSD(totalRawPipeline)}
@@ -428,7 +429,7 @@ export default function ScorecardPage() {
         </div>
 
         {totalTryDealCount > 0 && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 shadow-xs dark:border-amber-900/40 dark:bg-amber-950/40">
+          <div className={`rounded-xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-900/40 dark:bg-amber-950/40 ${CARD_HOVER_SHADOW}`}>
             <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">Ayrıştırılan TL (TRY) Ciro</span>
             <h3 className="mt-1 font-mono text-xl font-bold text-amber-900 dark:text-amber-300">
               {formatTRY(totalTryRawPipeline)}
@@ -437,7 +438,7 @@ export default function ScorecardPage() {
           </div>
         )}
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className={KPI_TILE_SHELL_XL}>
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Günü Geçmiş Açık İşler</span>
           <h3 className="mt-1 font-mono text-xl font-bold text-red-600 dark:text-red-400 flex items-center gap-1.5">
             <AlertTriangle className="h-5 w-5" /> {totalOverdueCount} Açık Fırsat
@@ -445,7 +446,7 @@ export default function ScorecardPage() {
           <p className="text-[11px] text-slate-400 mt-0.5">Temizlenmesi gereken geçmiş tarihli işler</p>
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className={KPI_TILE_SHELL_XL}>
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Ort. CRM Hijyen Skoru</span>
           <h3 className="mt-1 font-mono text-xl font-extrabold text-emerald-700 dark:text-emerald-400">
             %{avgHealthScore}
@@ -455,7 +456,7 @@ export default function ScorecardPage() {
       </div>
 
       {/* Interactive Hygiene & Audit Cards */}
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
+      <div className={`${KPI_TILE_SHELL_XL} space-y-3`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <ShieldAlert className="h-5 w-5 text-amber-600 dark:text-amber-400" />
@@ -467,19 +468,19 @@ export default function ScorecardPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <button type="button" onClick={() => setActiveAuditCategory("OVERDUE")} className="flex items-center justify-between p-3.5 rounded-xl border border-red-200 bg-red-50/60 hover:bg-red-100/80 transition-all text-left group dark:border-red-900/40 dark:bg-red-950/30">
+          <button type="button" onClick={() => setActiveAuditCategory("OVERDUE")} className={`flex items-center justify-between p-3.5 rounded-xl border border-red-200 bg-red-50/60 hover:bg-red-100/80 text-left group dark:border-red-900/40 dark:bg-red-950/30 ${CARD_HOVER_SHADOW}`}>
             <div><span className="text-[11px] font-bold text-red-800 block">🔴 Günü Geçmiş İşler</span></div>
             <div className="font-mono text-lg font-black text-red-700">{auditCounts.overdue || totalOverdueCount}</div>
           </button>
-          <button type="button" onClick={() => setActiveAuditCategory("CURRENCY_CONFLICT")} className="flex items-center justify-between p-3.5 rounded-xl border border-amber-200 bg-amber-50/60 hover:bg-amber-100/80 transition-all text-left group dark:border-amber-900/40 dark:bg-amber-950/30">
+          <button type="button" onClick={() => setActiveAuditCategory("CURRENCY_CONFLICT")} className={`flex items-center justify-between p-3.5 rounded-xl border border-amber-200 bg-amber-50/60 hover:bg-amber-100/80 text-left group dark:border-amber-900/40 dark:bg-amber-950/30 ${CARD_HOVER_SHADOW}`}>
             <div><span className="text-[11px] font-bold text-amber-800 block">🔀 Kur Çelişkisi</span></div>
             <div className="font-mono text-lg font-black text-amber-700">{auditCounts.currencyConflict}</div>
           </button>
-          <button type="button" onClick={() => setActiveAuditCategory("ZERO_INVOICING")} className="flex items-center justify-between p-3.5 rounded-xl border border-orange-200 bg-orange-50/60 hover:bg-orange-100/80 transition-all text-left group dark:border-orange-900/40 dark:bg-orange-950/30">
+          <button type="button" onClick={() => setActiveAuditCategory("ZERO_INVOICING")} className={`flex items-center justify-between p-3.5 rounded-xl border border-orange-200 bg-orange-50/60 hover:bg-orange-100/80 text-left group dark:border-orange-900/40 dark:bg-orange-950/30 ${CARD_HOVER_SHADOW}`}>
             <div><span className="text-[11px] font-bold text-orange-800 block">⚠️ Faturalanma %0</span></div>
             <div className="font-mono text-lg font-black text-orange-700">{auditCounts.zeroInvoicing}</div>
           </button>
-          <button type="button" onClick={() => setActiveAuditCategory("UNASSIGNED_BRAND")} className="flex items-center justify-between p-3.5 rounded-xl border border-blue-200 bg-blue-50/60 hover:bg-blue-100/80 transition-all text-left group dark:border-blue-900/40 dark:bg-blue-950/30">
+          <button type="button" onClick={() => setActiveAuditCategory("UNASSIGNED_BRAND")} className={`flex items-center justify-between p-3.5 rounded-xl border border-blue-200 bg-blue-50/60 hover:bg-blue-100/80 text-left group dark:border-blue-900/40 dark:bg-blue-950/30 ${CARD_HOVER_SHADOW}`}>
             <div><span className="text-[11px] font-bold text-blue-800 block">🛠️ Atanmamış Marka</span></div>
             <div className="font-mono text-lg font-black text-blue-700">{auditCounts.unassigned}</div>
           </button>

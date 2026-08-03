@@ -37,6 +37,7 @@ import { MultiSelectFilter, FilterOption } from "@/components/ui/multi-select-fi
 import { formatCompactUSD, formatPercent, formatUSD } from "@/components/viz/format";
 import { STATUS_META, StatusValue, getAccuracyStatus } from "@/components/viz/status";
 import { EmptyState, Meter, ValueTile } from "@/components/viz/tiles";
+import { KPI_TILE_SHELL } from "@/components/viz/card-shell";
 import { TrendCard, TrendMeasure } from "@/components/viz/trend-chart";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 import { getForecastHistoryData, getForecastTrendData } from "./actions";
@@ -82,7 +83,7 @@ function AccuracyTile({ label, value, icon: Icon }: { label: string; value: numb
   const { ink, Icon: StatusIcon, label: statusLabel } = STATUS_META[status];
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <div className={KPI_TILE_SHELL}>
       <div className="flex items-start justify-between gap-3">
         <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span>
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
@@ -465,7 +466,7 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1fr]">
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className={KPI_TILE_SHELL}>
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h3 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">
@@ -501,7 +502,7 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
           </div>
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className={KPI_TILE_SHELL}>
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h3 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">
@@ -786,7 +787,7 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
         </Table>
       </div>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className={KPI_TILE_SHELL}>
         <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h3 className="font-serif text-lg font-bold text-[#1F3A2E] dark:text-emerald-400">

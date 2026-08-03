@@ -27,6 +27,7 @@ import {
   ChevronRight,
   TrendingDown,
   FileSpreadsheet,
+  Table2,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -67,6 +68,7 @@ export default function Sidebar({ user, isCollapsed, setIsCollapsed }: SidebarPr
       title: "FORECAST",
       items: [
         { name: "Forecast Giriş", href: "/forecast-input", icon: CalendarDays },
+        { name: "Haftalık Detay Formu", href: "/weekly-forecast", icon: Table2 },
         { name: "Geçmiş", href: "/forecast-history", icon: History },
       ],
     },

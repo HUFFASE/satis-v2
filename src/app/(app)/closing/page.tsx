@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/table";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
+  BarChart3,
   Calendar,
   CheckCircle2,
   ChevronDown,
@@ -345,10 +346,22 @@ export default function ClosingPage() {
   };
 
   const handleDownloadTemplate = () => {
-    const headers = ["Number", "finansal yıl + çeyrek", "Marka", "kapanış revenue", "kapanış GP"];
+    // Aylık şablon. Eski (çeyreklik) sütunlu dosyalar da kabul edilmeye devam
+    // eder; aylık sütunlar dolduğunda çeyrek toplamı onlardan türetilir.
+    const headers = [
+      "Number",
+      "finansal yıl + çeyrek",
+      "Marka",
+      "kapanış revenue M1",
+      "kapanış revenue M2",
+      "kapanış revenue M3",
+      "kapanış GP M1",
+      "kapanış GP M2",
+      "kapanış GP M3",
+    ];
     const sampleRows = [
-      ["1", `FY${fiscalYear}-Q${quarter}`, "CISCO", "1000000", "100000"],
-      ["2", `FY${fiscalYear}-Q${quarter}`, "ARUBA", "500000", "60000"],
+      ["1", `FY${fiscalYear}-Q${quarter}`, "CISCO", "300000", "350000", "350000", "30000", "35000", "35000"],
+      ["2", `FY${fiscalYear}-Q${quarter}`, "ARUBA", "150000", "175000", "175000", "18000", "21000", "21000"],
     ];
     const html = `<!doctype html><html><head><meta charset="UTF-8" /></head><body><table><tr>${headers
       .map((header) => `<th>${escapeExcelCell(header)}</th>`)
@@ -368,6 +381,8 @@ export default function ClosingPage() {
 
   const targetAchievement = calculatePercent(totals.closingRevenue, totals.targetRevenue);
   const forecastAchievement = calculatePercent(totals.closingRevenue, totals.forecastRevenue);
+  const targetGpAchievement = calculatePercent(totals.closingGp, totals.targetGp);
+  const forecastGpAchievement = calculatePercent(totals.closingGp, totals.forecastGp);
   const closingGpPercent = calculateGpPercent(totals.closingRevenue, totals.closingGp);
   const targetGpPercentTotal = calculateGpPercent(totals.targetRevenue, totals.targetGp);
 
@@ -458,7 +473,7 @@ export default function ClosingPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         <AchievementTile
           label="Target Achievement"
           achievement={targetAchievement}
@@ -469,6 +484,15 @@ export default function ClosingPage() {
           icon={Target}
         />
         <AchievementTile
+          label="GP Target Achievement"
+          achievement={targetGpAchievement}
+          forecastValue={totals.closingGp}
+          targetValue={totals.targetGp}
+          valueLabel="GP Kapanış"
+          targetLabel="Target GP"
+          icon={TrendingUp}
+        />
+        <AchievementTile
           label="Forecast vs Kapanış"
           achievement={forecastAchievement}
           forecastValue={totals.closingRevenue}
@@ -476,6 +500,15 @@ export default function ClosingPage() {
           valueLabel="Kapanış"
           targetLabel="Forecast"
           icon={TrendingUp}
+        />
+        <AchievementTile
+          label="GP Forecast vs Kapanış"
+          achievement={forecastGpAchievement}
+          forecastValue={totals.closingGp}
+          targetValue={totals.forecastGp}
+          valueLabel="GP Kapanış"
+          targetLabel="Forecast GP"
+          icon={BarChart3}
         />
         <ValueTile
           label="Kapanış GP"

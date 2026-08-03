@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import prisma from "@/lib/prisma";
 import { ensureFiscalPeriod } from "@/lib/fiscal-db";
 import { getAccessibleVendorIds } from "@/lib/scope";
+import { monthlyTriples, round2, sumTriple, type MonthlyTriple } from "@/lib/monthly";
 import { revalidatePath } from "next/cache";
 import * as XLSX from "xlsx";
 
@@ -16,9 +17,25 @@ interface ParsedClosingRow {
   brand: string;
   fiscalYear: number;
   quarter: number;
+  /** Çeyrek toplamı — aylık moddaysa aylardan türetilir. */
   revenue: number;
   gp: number;
+  /** Aylık kırılım; eski (çeyreklik) şablonla yüklendiğinde null. */
+  revenueM: MonthlyTriple | null;
+  gpM: MonthlyTriple | null;
 }
+
+/** Aylık şablon başlıkları; her biri için birkaç eşanlamlı kabul edilir. */
+const MONTHLY_REVENUE_HEADERS: string[][] = [
+  ["kapanış revenue M1", "Closing Revenue M1", "Revenue M1"],
+  ["kapanış revenue M2", "Closing Revenue M2", "Revenue M2"],
+  ["kapanış revenue M3", "Closing Revenue M3", "Revenue M3"],
+];
+const MONTHLY_GP_HEADERS: string[][] = [
+  ["kapanış GP M1", "Closing GP M1", "GP M1"],
+  ["kapanış GP M2", "Closing GP M2", "GP M2"],
+  ["kapanış GP M3", "Closing GP M3", "GP M3"],
+];
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (!(error instanceof Error)) return fallback;
@@ -145,14 +162,64 @@ function parseClosingRows(rows: Record<string, unknown>[], fallbackFiscalYear: n
       const revenueText = getCellText(row, ["kapanış revenue", "Closing Revenue", "Revenue"]);
       const gpText = getCellText(row, ["kapanış GP", "Closing GP", "GP"]);
 
-      if (!number && !brand && !quarterText && !revenueText && !gpText) return null;
+      const monthlyRevenueText = MONTHLY_REVENUE_HEADERS.map((keys) => getCellText(row, keys));
+      const monthlyGpText = MONTHLY_GP_HEADERS.map((keys) => getCellText(row, keys));
+      const hasAnyMonthly = [...monthlyRevenueText, ...monthlyGpText].some((t) => t !== "");
+
+      if (!number && !brand && !quarterText && !revenueText && !gpText && !hasAnyMonthly) return null;
       if (!brand) throw new Error(`${rowNumber}. satırda Marka alanı boş.`);
 
       const { fiscalYear, quarter } = parseQuarterValue(quarterText, fallbackFiscalYear, fallbackQuarter);
+
+      // Aylık mod: altı alanın hepsi zorunlu, çeyrek toplamı türetilir.
+      if (hasAnyMonthly) {
+        const eksikIdx = [...monthlyRevenueText, ...monthlyGpText]
+          .map((t, i) => (t === "" ? i : -1))
+          .filter((i) => i >= 0);
+        if (eksikIdx.length > 0) {
+          const adlar = eksikIdx.map((i) =>
+            i < 3 ? MONTHLY_REVENUE_HEADERS[i][0] : MONTHLY_GP_HEADERS[i - 3][0],
+          );
+          throw new Error(
+            `${rowNumber}. satırda aylık kırılım eksik. Boş sütunlar: ${adlar.join(", ")}. Aylık yüklemede altı alanın da dolu olması gerekir.`,
+          );
+        }
+
+        const revenueM = monthlyRevenueText.map((t, i) =>
+          round2(parseImportNumber(t, MONTHLY_REVENUE_HEADERS[i][0], rowNumber)),
+        ) as MonthlyTriple;
+        const gpM = monthlyGpText.map((t, i) =>
+          round2(parseImportNumber(t, MONTHLY_GP_HEADERS[i][0], rowNumber)),
+        ) as MonthlyTriple;
+        const revenue = sumTriple(revenueM);
+        const gp = sumTriple(gpM);
+
+        // Eski çeyrek sütunları da doldurulmuşsa çelişki olmamalı.
+        if (revenueText !== "") {
+          const beyan = parseImportNumber(revenueText, "Kapanış Revenue", rowNumber);
+          if (Math.abs(beyan - revenue) > 0.01) {
+            throw new Error(
+              `${rowNumber}. satırda Kapanış Revenue (${beyan}) aylık toplamla (${revenue}) uyuşmuyor.`,
+            );
+          }
+        }
+        if (gpText !== "") {
+          const beyan = parseImportNumber(gpText, "Kapanış GP", rowNumber);
+          if (Math.abs(beyan - gp) > 0.01) {
+            throw new Error(
+              `${rowNumber}. satırda Kapanış GP (${beyan}) aylık toplamla (${gp}) uyuşmuyor.`,
+            );
+          }
+        }
+
+        return { rowNumber, number, brand, fiscalYear, quarter, revenue, gp, revenueM, gpM };
+      }
+
+      // Eski mod: yalnızca çeyrek toplamı; aylık kolonlara dokunulmaz.
       const revenue = parseImportNumber(revenueText, "Kapanış Revenue", rowNumber);
       const gp = parseImportNumber(gpText, "Kapanış GP", rowNumber);
 
-      return { rowNumber, number, brand, fiscalYear, quarter, revenue, gp };
+      return { rowNumber, number, brand, fiscalYear, quarter, revenue, gp, revenueM: null, gpM: null };
     })
     .filter((row): row is ParsedClosingRow => row !== null);
 }
@@ -234,6 +301,12 @@ export async function getClosings(fiscalYear: number, quarter: number) {
       forecastAchievement: calculateAchievement(closingRevenue, forecastRevenue),
       forecastGpAchievement: calculateAchievement(closingGp, forecastGp),
       hasClosing: Boolean(closing),
+      // Aylık kırılım; null = girilmemiş. Çeyrek toplamındaki "yoksa 0" kuralı
+      // buraya UYGULANMAZ, yoksa "girilmemiş" ile "sıfır" ayırt edilemez.
+      closingRevenueM: monthlyTriples(closing)?.revenue ?? null,
+      closingGpM: monthlyTriples(closing)?.gp ?? null,
+      targetRevenueM: monthlyTriples(target)?.revenue ?? null,
+      targetGpM: monthlyTriples(target)?.gp ?? null,
       updatedAt: closing?.updatedAt ?? null,
       isPeriodLocked: period.isLocked,
     };
@@ -290,6 +363,8 @@ export async function importClosingsFromXls(formData: FormData, fallbackFiscalYe
         fiscalPeriodId: string;
         revenue: number;
         gp: number;
+        revenueM: MonthlyTriple | null;
+        gpM: MonthlyTriple | null;
       }
     >();
     const skippedBrands = new Set<string>();
@@ -311,11 +386,31 @@ export async function importClosingsFromXls(formData: FormData, fallbackFiscalYe
 
       const importKey = makeImportKey(vendor.id, period.id);
       const existing = importRows.get(importKey);
+
+      // Aynı marka birden fazla satırda geçebiliyor; çeyrek toplamı gibi aylık
+      // kırılım da TOPLANMALI, yoksa revenue = M1+M2+M3 eşitliği bozulur.
+      // Bir satır aylık, diğeri çeyreklik geldiyse aylık kırılım terk edilir —
+      // eksik bir kırılımı doğruymuş gibi yazmaktansa hiç yazmamak doğrudur.
+      const bothMonthly = row.revenueM !== null && row.gpM !== null;
+      const carryMonthly = existing ? existing.revenueM !== null && existing.gpM !== null : true;
+      const mergedMonthly =
+        bothMonthly && carryMonthly
+          ? {
+              revenueM: [0, 1, 2].map(
+                (i) => round2((existing?.revenueM?.[i] ?? 0) + row.revenueM![i]),
+              ) as MonthlyTriple,
+              gpM: [0, 1, 2].map(
+                (i) => round2((existing?.gpM?.[i] ?? 0) + row.gpM![i]),
+              ) as MonthlyTriple,
+            }
+          : { revenueM: null, gpM: null };
+
       importRows.set(importKey, {
         vendorId: vendor.id,
         fiscalPeriodId: period.id,
-        revenue: (existing?.revenue ?? 0) + row.revenue,
-        gp: (existing?.gp ?? 0) + row.gp,
+        revenue: round2((existing?.revenue ?? 0) + row.revenue),
+        gp: round2((existing?.gp ?? 0) + row.gp),
+        ...mergedMonthly,
       });
     }
 
@@ -333,15 +428,33 @@ export async function importClosingsFromXls(formData: FormData, fallbackFiscalYe
               fiscalPeriodId: row.fiscalPeriodId,
             },
           },
+          // Aylık kolonlar yalnızca aylık şablonla yüklendiğinde yazılır;
+          // eski şablonla yüklemede mevcut kırılıma dokunulmaz.
           update: {
             revenue: row.revenue,
             gp: row.gp,
+            ...(row.revenueM && row.gpM
+              ? {
+                  revenueM1: row.revenueM[0],
+                  revenueM2: row.revenueM[1],
+                  revenueM3: row.revenueM[2],
+                  gpM1: row.gpM[0],
+                  gpM2: row.gpM[1],
+                  gpM3: row.gpM[2],
+                }
+              : {}),
           },
           create: {
             vendorId: row.vendorId,
             fiscalPeriodId: row.fiscalPeriodId,
             revenue: row.revenue,
             gp: row.gp,
+            revenueM1: row.revenueM?.[0] ?? null,
+            revenueM2: row.revenueM?.[1] ?? null,
+            revenueM3: row.revenueM?.[2] ?? null,
+            gpM1: row.gpM?.[0] ?? null,
+            gpM2: row.gpM?.[1] ?? null,
+            gpM3: row.gpM?.[2] ?? null,
           },
         });
       }

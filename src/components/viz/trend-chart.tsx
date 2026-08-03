@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { LineChart, Table2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "./tiles";
+import { KPI_TILE_SHELL } from "./card-shell";
 
 export type TrendPoint = {
   /** X ekseninde görünen kısa etiket ("H5"). */
@@ -325,7 +326,7 @@ export function TrendCard({
       className={
         bare
           ? ""
-          : "rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+          : KPI_TILE_SHELL
       }
     >
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">

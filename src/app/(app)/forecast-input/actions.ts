@@ -10,6 +10,11 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import * as XLSX from "xlsx";
 import { parseTDSynnexCrmExcel } from "@/lib/crm/tdsynnex-parser";
+import {
+  assertCurrentFiscalPeriod,
+  writeActiveForecast,
+} from "@/lib/forecast/write-active-forecast";
+import { assertForecastEntryChannel } from "@/lib/forecast/flags";
 
 const submitForecastSchema = z.object({
   revenue: z.number().min(0, "Revenue değeri sıfırdan küçük olamaz."),
@@ -170,88 +175,6 @@ async function getAccessibleVendorLookup(user: { id: string; role: string }) {
     vendors: vendors.map((vendor) => ({ id: vendor.id, name: vendor.name })),
     vendorLookup,
     accessibleVendorIds,
-  };
-}
-
-function assertCurrentFiscalPeriod(fiscalYear: number, quarter: number) {
-  const currentContext = getFiscalContext(new Date());
-
-  if (currentContext.fiscalYear !== fiscalYear || currentContext.quarter !== quarter) {
-    throw new Error(
-      `Forecast yalnızca aktif çeyrek için girilebilir. Aktif dönem FY${currentContext.fiscalYear} - Q${currentContext.quarter}, aktif hafta ${currentContext.weekInQuarter}. hafta.`
-    );
-  }
-
-  return currentContext.weekInQuarter;
-}
-
-async function writeActiveForecast(
-  tx: Prisma.TransactionClient,
-  input: {
-    vendorId: string;
-    fiscalPeriodId: string;
-    weekNumber: number;
-    revenue: number;
-    gp: number;
-    note?: string | null;
-    submittedById: string;
-  }
-) {
-  const previousActive = await tx.forecast.findFirst({
-    where: {
-      vendorId: input.vendorId,
-      fiscalPeriodId: input.fiscalPeriodId,
-      isActive: true,
-    },
-  });
-
-  const existingWeekForecast = await tx.forecast.findFirst({
-    where: {
-      vendorId: input.vendorId,
-      fiscalPeriodId: input.fiscalPeriodId,
-      weekNumber: input.weekNumber,
-    },
-  });
-
-  await tx.forecast.updateMany({
-    where: {
-      vendorId: input.vendorId,
-      fiscalPeriodId: input.fiscalPeriodId,
-      ...(existingWeekForecast ? { id: { not: existingWeekForecast.id } } : {}),
-    },
-    data: {
-      isActive: false,
-    },
-  });
-
-  const forecast = existingWeekForecast
-    ? await tx.forecast.update({
-        where: { id: existingWeekForecast.id },
-        data: {
-          revenue: input.revenue,
-          gp: input.gp,
-          note: input.note !== undefined ? input.note : existingWeekForecast.note,
-          submittedById: input.submittedById,
-          isActive: true,
-        },
-      })
-    : await tx.forecast.create({
-        data: {
-          vendorId: input.vendorId,
-          fiscalPeriodId: input.fiscalPeriodId,
-          weekNumber: input.weekNumber,
-          revenue: input.revenue,
-          gp: input.gp,
-          note: input.note ?? null,
-          submittedById: input.submittedById,
-          isActive: true,
-        },
-      });
-
-  return {
-    forecast,
-    previousActive,
-    wasUpdate: Boolean(previousActive && previousActive.weekNumber === input.weekNumber),
   };
 }
 
@@ -434,6 +357,14 @@ export async function submitForecast(
     return { success: false, error: "Oturum açık değil." };
   }
 
+  // Forecast girişi Haftalık Detay Formu'na taşındı; bu kanal kapalı.
+  try {
+    assertForecastEntryChannel();
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Bu işlem artık kullanılmıyor.") };
+  }
+
+
   try {
     await assertVendorAccess(session.user, vendorId);
   } catch (err: unknown) {
@@ -529,6 +460,14 @@ export async function copyPreviousWeekForecastsForManager(
   if (!session?.user) {
     return { success: false, error: "Oturum açık değil." };
   }
+
+  // Forecast girişi Haftalık Detay Formu'na taşındı; bu kanal kapalı.
+  try {
+    assertForecastEntryChannel();
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Bu işlem artık kullanılmıyor.") };
+  }
+
 
   let weekNumber: number;
   try {
@@ -685,6 +624,14 @@ export async function importForecastFromXls(
   if (!session?.user) {
     return { success: false, error: "Oturum açık değil." };
   }
+
+  // Forecast girişi Haftalık Detay Formu'na taşındı; bu kanal kapalı.
+  try {
+    assertForecastEntryChannel();
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Bu işlem artık kullanılmıyor.") };
+  }
+
 
   const { file, error } = getImportFile(formData);
   if (!file) {
@@ -935,6 +882,10 @@ export async function uploadCrmExcelAction(
   const session = await auth();
   if (!session?.user) {
     return { success: false, error: "Oturum açık değil." };
+  }
+
+  if (session.user.role !== "DIREKTOR") {
+    return { success: false, error: "CRM Excel yüklemesi yalnızca direktör tarafından yapılabilir." };
   }
 
   const file = formData.get("file") as File | null;
@@ -1226,6 +1177,7 @@ export async function getManagerScorecardsAction(fiscalYear: number, quarter: nu
   }
 
   const period = await ensureFiscalPeriod(fiscalYear, quarter);
+  const isDirector = session.user.role === "DIREKTOR";
 
   if (!prisma.salesManagerScorecard) {
     return [];
@@ -1238,6 +1190,7 @@ export async function getManagerScorecardsAction(fiscalYear: number, quarter: nu
       user: {
         role: "SATIS_MUDURU",
       },
+      ...(isDirector ? {} : { userId: session.user.id }),
     },
   });
 
@@ -1267,15 +1220,37 @@ export async function getVendorScorecardsAction(fiscalYear: number, quarter: num
   }
 
   const period = await ensureFiscalPeriod(fiscalYear, quarter);
+  const isDirector = session.user.role === "DIREKTOR";
+  const accessibleVendorIds = await getAccessibleVendorIds(session.user);
 
   if (!prisma.vendorScorecard) {
     return [];
   }
 
+  const accessibleVendorNames =
+    isDirector || accessibleVendorIds.length === 0
+      ? []
+      : (
+          await prisma.vendor.findMany({
+            where: { id: { in: accessibleVendorIds }, isActive: true },
+            select: { name: true },
+          })
+        ).map((vendor) => vendor.name);
+
   const scorecards = await prisma.vendorScorecard.findMany({
     where: {
       fiscalPeriodId: period.id,
       weekNumber,
+      ...(isDirector
+        ? {}
+        : accessibleVendorIds.length === 0
+          ? { vendorId: { in: [] as string[] } }
+          : {
+              OR: [
+                { vendorId: { in: accessibleVendorIds } },
+                { vendorName: { in: accessibleVendorNames, mode: "insensitive" } },
+              ],
+            }),
     },
   });
 

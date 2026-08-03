@@ -3,7 +3,17 @@
 import prisma from "@/lib/prisma";
 import { auth } from "@/auth";
 import { ensureFiscalPeriod } from "@/lib/fiscal-db";
-import { CrmAuditDeal } from "@/lib/crm/tdsynnex-parser";
+import { getAccessibleVendorIds } from "@/lib/scope";
+import { CrmAuditDeal, calculateOpportunityMultiplier } from "@/lib/crm/tdsynnex-parser";
+
+function vendorScorecardScopeFilter(accessibleVendorIds: string[], accessibleVendorNames: string[]) {
+  return {
+    OR: [
+      { vendorId: { in: accessibleVendorIds } },
+      { vendorName: { in: accessibleVendorNames, mode: "insensitive" as const } },
+    ],
+  };
+}
 
 export interface WinRateTierItem {
   count: number;
@@ -74,12 +84,27 @@ export async function getCrmAnalyticsDataAction(
   }
 
   const period = await ensureFiscalPeriod(fiscalYear, quarter);
+  const isDirector = session.user.role === "DIREKTOR";
+  const accessibleVendorIds = await getAccessibleVendorIds(session.user);
+  const accessibleVendors = isDirector
+    ? []
+    : await prisma.vendor.findMany({
+        where: { id: { in: accessibleVendorIds }, isActive: true },
+        select: { id: true, name: true },
+      });
+  const accessibleVendorNames = accessibleVendors.map((vendor) => vendor.name);
+  const vendorScope = isDirector
+    ? undefined
+    : accessibleVendorIds.length === 0
+      ? { vendorId: { in: [] as string[] } }
+      : vendorScorecardScopeFilter(accessibleVendorIds, accessibleVendorNames);
 
   // 1. Fetch Sales Manager scorecards
   const managerScorecards = await prisma.salesManagerScorecard.findMany({
     where: {
       fiscalPeriodId: period.id,
       weekNumber,
+      ...(isDirector ? {} : { userId: session.user.id }),
     },
     include: {
       user: { select: { id: true, name: true, role: true } },
@@ -91,6 +116,7 @@ export async function getCrmAnalyticsDataAction(
     where: {
       fiscalPeriodId: period.id,
       weekNumber,
+      ...(vendorScope ?? {}),
     },
     include: {
       vendor: {
@@ -155,7 +181,10 @@ export async function getCrmAnalyticsDataAction(
     const zero = { count: 0, amount: 0 };
 
     smDeals.forEach((d) => {
-      const mult = d.multiplier ?? 0;
+      // ⚠ `d.multiplier` canlı crmAuditJson verisinde YOK — `?? 0` ile okumak
+      // %75/%50/%25 fırsatlarını sessizce "zero" kovasına düşürüyordu.
+      // Oran metinlerinden yeniden hesaplıyoruz (parser ile aynı kural).
+      const mult = calculateOpportunityMultiplier(d.winRate, d.invoicingWinRate);
       const amt = d.selling || 0;
 
       if (d.winRate === "%100" || mult === 1.0) {
@@ -239,7 +268,7 @@ export async function getCrmAnalyticsDataAction(
 
     const item = amMap.get(amName)!;
     item.totalDeals += 1;
-    const mult = d.multiplier ?? 0;
+    const mult = calculateOpportunityMultiplier(d.winRate, d.invoicingWinRate);
 
     if (d.winRate === "%100") {
       item.closedWonCount += 1;
@@ -274,7 +303,10 @@ export async function getCrmAnalyticsDataAction(
 
   // 5. Weekly CRM Hygiene Trend (Weeks 1 to 13)
   const allWeeksVendors = await prisma.vendorScorecard.findMany({
-    where: { fiscalPeriodId: period.id },
+    where: {
+      fiscalPeriodId: period.id,
+      ...(vendorScope ?? {}),
+    },
     select: { weekNumber: true, crmHealthScore: true, overdueCount: true, totalDeals: true },
   });
 
