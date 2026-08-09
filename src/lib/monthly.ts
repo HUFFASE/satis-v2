@@ -131,3 +131,33 @@ export function actualMonthlyTriples(
 export function monthlySumMatches(triple: MonthlyTriple, quarterTotal: number): boolean {
   return Math.abs(sumTriple(triple) - quarterTotal) <= MONTHLY_SUM_TOLERANCE;
 }
+
+/** Çeyrek Invoiced NSB + Backlog NSB (Excel Q3 NSB Inv.+Backl.). */
+export function actualDisplayNsbTotal(
+  row: { invoiced: unknown; backlog: unknown } | null | undefined,
+): number {
+  if (!row) return 0;
+  return round2(toNumber(row.invoiced) + toNumber(row.backlog));
+}
+
+/** Çeyrek Invoiced GP + Backlog GP toplamı. */
+export function actualDisplayGpTotal(row: ActualMonthlyColumns | null | undefined): number {
+  if (!row) return 0;
+  const invoicedGp = round2(
+    toNumber(row.invoicedGpM1) + toNumber(row.invoicedGpM2) + toNumber(row.invoicedGpM3),
+  );
+  const backlogGp = round2(
+    toNumber(row.backlogGpM1) + toNumber(row.backlogGpM2) + toNumber(row.backlogGpM3),
+  );
+  const hasGpBreakdown =
+    isFilled(row.invoicedGpM1) ||
+    isFilled(row.invoicedGpM2) ||
+    isFilled(row.invoicedGpM3) ||
+    isFilled(row.backlogGpM1) ||
+    isFilled(row.backlogGpM2) ||
+    isFilled(row.backlogGpM3);
+  if (hasGpBreakdown) {
+    return round2(invoicedGp + backlogGp);
+  }
+  return 0;
+}

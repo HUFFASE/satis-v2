@@ -10,6 +10,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import * as XLSX from "xlsx";
 import { parseTDSynnexCrmExcel } from "@/lib/crm/tdsynnex-parser";
+import { MAX_CRM_FILE_SIZE_BYTES } from "@/lib/upload-limits";
 import {
   assertCurrentFiscalPeriod,
   writeActiveForecast,
@@ -23,6 +24,7 @@ const submitForecastSchema = z.object({
 });
 
 const MAX_IMPORT_FILE_SIZE = 5 * 1024 * 1024;
+const MAX_CRM_FILE_SIZE = MAX_CRM_FILE_SIZE_BYTES;
 const SKIP_FORECAST_SHEET_VALUE = "__skip__";
 
 const forecastSheetMappingSchema = z.array(
@@ -893,6 +895,20 @@ export async function uploadCrmExcelAction(
     return { success: false, error: "Lütfen geçerli bir CRM Excel dosyası seçin." };
   }
 
+  if (!file.name.match(/\.(xls|xlsx|xlsb)$/i)) {
+    return {
+      success: false,
+      error: "Lütfen .xls, .xlsx veya .xlsb uzantılı bir CRM dosyası seçin.",
+    };
+  }
+
+  if (file.size > MAX_CRM_FILE_SIZE) {
+    return {
+      success: false,
+      error: `CRM dosyası en fazla ${MAX_CRM_FILE_SIZE / (1024 * 1024)} MB olabilir. Dosyanız ${(file.size / (1024 * 1024)).toFixed(1)} MB.`,
+    };
+  }
+
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
     const parsed = parseTDSynnexCrmExcel(buffer, fiscalYear, quarter);
@@ -951,6 +967,7 @@ export async function uploadCrmExcelAction(
 
       if (unmatchedBrands.length > 0) {
         return {
+          success: false,
           requiresMapping: true,
           unmatchedBrands,
           availableVendors: dbVendors.map((v) => ({

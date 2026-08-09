@@ -7,6 +7,7 @@ import { getAccessibleVendorIds } from "@/lib/scope";
 import { getFiscalContext } from "@/lib/fiscal";
 import { ensureFiscalPeriod } from "@/lib/fiscal-db";
 import { getLatestBacklogSnapshots } from "@/lib/backlog";
+import { actualDisplayGpTotal, actualDisplayNsbTotal } from "@/lib/monthly";
 
 function calculatePercent(numerator: number, denominator: number) {
   return denominator > 0 ? (numerator / denominator) * 100 : 0;
@@ -150,8 +151,8 @@ export async function getDashboardData(quarter?: number) {
       targetGp: target ? Number(target.gp) : 0,
       forecastRevenue: forecast ? Number(forecast.revenue) : 0,
       forecastGp: forecast ? Number(forecast.gp) : 0,
-      backlogRevenue: actual ? Number(actual.backlog) : 0,
-      backlogGp: actual ? Number(actual.invoiced) : 0,
+      backlogRevenue: actual ? actualDisplayNsbTotal(actual) : 0,
+      backlogGp: actual ? actualDisplayGpTotal(actual) : 0,
     };
 
     const groupId = vendor.managerId ?? "unassigned";

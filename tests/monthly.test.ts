@@ -16,6 +16,8 @@ import {
   sumTriple,
   monthlySumMatches,
   round2,
+  actualDisplayNsbTotal,
+  actualDisplayGpTotal,
 } from "../src/lib/monthly";
 
 describe("Çeyrek ay yardımcıları", () => {
@@ -128,6 +130,23 @@ describe("Aylık kırılım yardımcıları", () => {
     expect(monthlySumMatches([100, 100, 100], 300)).toBe(true);
     expect(monthlySumMatches([100, 100, 100.005], 300)).toBe(true);
     expect(monthlySumMatches([100, 100, 101], 300)).toBe(false);
+  });
+
+  it("Actual NSB toplamını invoiced + backlog NSB olarak hesaplar", () => {
+    expect(actualDisplayNsbTotal({ invoiced: 89671395, backlog: 39885741 })).toBe(129557136);
+  });
+
+  it("Actual GP toplamını aylık invoiced/backlog GP'den hesaplar", () => {
+    expect(
+      actualDisplayGpTotal({
+        invoicedGpM1: 100,
+        invoicedGpM2: 200,
+        invoicedGpM3: 300,
+        backlogGpM1: 10,
+        backlogGpM2: 20,
+        backlogGpM3: 30,
+      }),
+    ).toBe(660);
   });
 });
 

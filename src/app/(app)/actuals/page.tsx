@@ -60,22 +60,23 @@ interface ActualRow {
   vendorName: string;
   managerId: string | null;
   managerName: string | null;
-  backlog: number;
-  invoiced: number;
+  nsbTotal: number;
+  gpTotal: number;
   updatedAt: Date | string | null;
   isPeriodLocked: boolean;
+  hasMonthlyBreakdown: boolean;
 }
 
 interface ManagerActualGroup {
   id: string;
   managerName: string;
   rows: ActualRow[];
-  backlog: number;
-  invoiced: number;
+  nsbTotal: number;
+  gpTotal: number;
   latestUpdatedAt: Date | string | null;
 }
 
-type ActualSortKey = "managerName" | "backlog" | "invoiced" | "gpPercent" | "latestUpdatedAt";
+type ActualSortKey = "managerName" | "nsbTotal" | "gpTotal" | "gpPercent" | "latestUpdatedAt";
 type SortDirection = "asc" | "desc";
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -153,8 +154,8 @@ export default function ActualsPage() {
 
   const handleOpenEdit = (row: ActualRow) => {
     setSelectedVendor(row);
-    setBacklogInput(row.backlog.toString());
-    setInvoicedInput(row.invoiced.toString());
+    setBacklogInput(row.nsbTotal.toString());
+    setInvoicedInput(row.gpTotal.toString());
     setIsEditModalOpen(true);
   };
 
@@ -202,10 +203,10 @@ export default function ActualsPage() {
 
   // Calculate live GP%
   const calculateLiveGPPercent = () => {
-    const revenue = parseFloat(backlogInput);
+    const nsb = parseFloat(backlogInput);
     const gp = parseFloat(invoicedInput);
-    if (isNaN(revenue) || isNaN(gp) || revenue <= 0) return "0.0%";
-    return formatPercent((gp / revenue) * 100);
+    if (isNaN(nsb) || isNaN(gp) || nsb <= 0) return "0.0%";
+    return formatPercent((gp / nsb) * 100);
   };
 
   // Multi-select filter states (Satış Müdürü -> Marka)
@@ -271,9 +272,9 @@ export default function ActualsPage() {
   }, [actuals, selectedManagerIds, selectedVendorIds]);
 
   // Totals calculations
-  const totalRevenue = filteredActuals.reduce((sum, item) => sum + item.backlog, 0);
-  const totalGP = filteredActuals.reduce((sum, item) => sum + item.invoiced, 0);
-  const totalGPPercent = totalRevenue > 0 ? (totalGP / totalRevenue) * 100 : 0;
+  const totalNsb = filteredActuals.reduce((sum, item) => sum + item.nsbTotal, 0);
+  const totalGP = filteredActuals.reduce((sum, item) => sum + item.gpTotal, 0);
+  const totalGPPercent = totalNsb > 0 ? (totalGP / totalNsb) * 100 : 0;
   // updatedAt yalnızca kayıt girildiğinde dolar; girilmemiş markaların sayısı buradan çıkar.
   const enteredBacklogCount = filteredActuals.filter((row) => row.updatedAt !== null).length;
   const missingBacklogCount = filteredActuals.length - enteredBacklogCount;
@@ -288,8 +289,8 @@ export default function ActualsPage() {
 
       if (existing) {
         existing.rows.push(row);
-        existing.backlog += row.backlog;
-        existing.invoiced += row.invoiced;
+        existing.nsbTotal += row.nsbTotal;
+        existing.gpTotal += row.gpTotal;
         if (
           row.updatedAt &&
           (!existing.latestUpdatedAt ||
@@ -304,8 +305,8 @@ export default function ActualsPage() {
         id: groupId,
         managerName,
         rows: [row],
-        backlog: row.backlog,
-        invoiced: row.invoiced,
+        nsbTotal: row.nsbTotal,
+        gpTotal: row.gpTotal,
         latestUpdatedAt: row.updatedAt,
       });
     }
@@ -327,7 +328,7 @@ export default function ActualsPage() {
   const sortedManagerGroups = useMemo(() => {
     const getValue = (group: ManagerActualGroup) => {
       if (sortKey === "managerName") return group.managerName;
-      if (sortKey === "gpPercent") return group.backlog > 0 ? (group.invoiced / group.backlog) * 100 : 0;
+      if (sortKey === "gpPercent") return group.nsbTotal > 0 ? (group.gpTotal / group.nsbTotal) * 100 : 0;
       if (sortKey === "latestUpdatedAt") return group.latestUpdatedAt ? new Date(group.latestUpdatedAt).getTime() : 0;
       return group[sortKey];
     };
@@ -547,18 +548,17 @@ export default function ActualsPage() {
       {/* Backlog girişi tamamlanmamış marka sayısı daha önce görünmüyordu. */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <ValueTile
-          label={user?.role === "DIREKTOR" ? "Toplam Backlog" : "Toplam Backlog (Sizin)"}
-          value={formatUSD(totalRevenue)}
+          label={user?.role === "DIREKTOR" ? "Toplam Backlog (NSB)" : "Toplam Backlog (NSB, Sizin)"}
+          value={formatUSD(totalNsb)}
           icon={Briefcase}
           rows={[{ label: "Gösterilen marka", value: `${filteredActuals.length}` }]}
         />
         <ValueTile
-          label={user?.role === "DIREKTOR" ? "Toplam Faturalanan" : "Toplam Faturalanan (Sizin)"}
+          label={user?.role === "DIREKTOR" ? "Toplam GP" : "Toplam GP (Sizin)"}
           value={formatUSD(totalGP)}
           icon={Receipt}
           rows={[
-            // Faturalanan/backlog oranının bir hedefi yok; renk taşımaz.
-            { label: "Ortalama oran", value: formatPercent(totalGPPercent) },
+            { label: "GP%", value: formatPercent(totalGPPercent) },
           ]}
         />
         <ValueTile
@@ -592,8 +592,8 @@ export default function ActualsPage() {
             <TableHeader className="bg-emerald-950 shadow-sm">
               <TableRow>
                 <SortableTableHead label="Satış Müdürü / Vendor" active={sortKey === "managerName"} direction={sortDirection} onClick={() => handleSort("managerName")} />
-                <SortableTableHead label="Revenue (USD)" align="right" active={sortKey === "backlog"} direction={sortDirection} onClick={() => handleSort("backlog")} />
-                <SortableTableHead label="GP (USD)" align="right" active={sortKey === "invoiced"} direction={sortDirection} onClick={() => handleSort("invoiced")} />
+                <SortableTableHead label="NSB (USD)" align="right" active={sortKey === "nsbTotal"} direction={sortDirection} onClick={() => handleSort("nsbTotal")} />
+                <SortableTableHead label="GP (USD)" align="right" active={sortKey === "gpTotal"} direction={sortDirection} onClick={() => handleSort("gpTotal")} />
                 <SortableTableHead label="GP%" align="right" active={sortKey === "gpPercent"} direction={sortDirection} onClick={() => handleSort("gpPercent")} className="w-32" />
                 <SortableTableHead label="Son Güncelleme" align="center" active={sortKey === "latestUpdatedAt"} direction={sortDirection} onClick={() => handleSort("latestUpdatedAt")} className="w-44" />
                 <TableHead className="w-32 bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50">İşlem</TableHead>
@@ -627,12 +627,12 @@ export default function ActualsPage() {
                           </span>
                         </button>
                       </TableCell>
-                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.backlog)}</TableCell>
-                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.invoiced)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.nsbTotal)}</TableCell>
+                      <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-950 dark:text-emerald-200">{formatUSD(group.gpTotal)}</TableCell>
                       <TableCell className="text-right font-mono text-sm font-extrabold tabular-nums">
                         <GpPercentCell
-                          value={group.backlog > 0 ? (group.invoiced / group.backlog) * 100 : 0}
-                          revenue={group.backlog}
+                          value={group.nsbTotal > 0 ? (group.gpTotal / group.nsbTotal) * 100 : 0}
+                          revenue={group.nsbTotal}
                         />
                       </TableCell>
                       <TableCell className="text-center text-slate-500 font-sans text-[11px]">
@@ -649,12 +649,12 @@ export default function ActualsPage() {
                           <TableCell className="pl-14 font-semibold text-slate-800 dark:text-slate-200">
                             {row.vendorName}
                           </TableCell>
-                          <TableCell className="text-right font-mono text-xs">{formatUSD(row.backlog)}</TableCell>
-                          <TableCell className="text-right font-mono text-xs">{formatUSD(row.invoiced)}</TableCell>
+                          <TableCell className="text-right font-mono text-xs">{formatUSD(row.nsbTotal)}</TableCell>
+                          <TableCell className="text-right font-mono text-xs">{formatUSD(row.gpTotal)}</TableCell>
                           <TableCell className="text-right font-mono text-xs font-semibold tabular-nums">
                             <GpPercentCell
-                              value={row.backlog > 0 ? (row.invoiced / row.backlog) * 100 : 0}
-                              revenue={row.backlog}
+                              value={row.nsbTotal > 0 ? (row.gpTotal / row.nsbTotal) * 100 : 0}
+                              revenue={row.nsbTotal}
                             />
                           </TableCell>
                           <TableCell className="text-center text-slate-500 font-sans text-[11px]">
@@ -671,16 +671,16 @@ export default function ActualsPage() {
                           </TableCell>
                           <TableCell className="text-right">
                             <Button
-                              variant={isPeriodLocked ? "ghost" : "outline"}
+                              variant={isPeriodLocked || row.hasMonthlyBreakdown ? "ghost" : "outline"}
                               size="sm"
                               onClick={() => handleOpenEdit(row)}
                               className={`h-8 font-sans ${
-                                isPeriodLocked
+                                isPeriodLocked || row.hasMonthlyBreakdown
                                   ? "text-slate-400 border-transparent hover:bg-transparent"
                                   : "border-slate-200 hover:bg-slate-50 hover:text-emerald-800 text-slate-700"
                               }`}
                             >
-                              {isPeriodLocked ? (
+                              {isPeriodLocked || row.hasMonthlyBreakdown ? (
                                 <>
                                   <Lock className="h-3.5 w-3.5 mr-1 text-slate-400" />
                                   İncele
@@ -702,10 +702,10 @@ export default function ActualsPage() {
               {/* Summary Bottom Row */}
               <TableRow className="border-t-2 border-emerald-800 bg-[#1F3A2E] font-bold text-white hover:bg-[#1F3A2E] dark:border-emerald-500 dark:bg-emerald-950">
                 <TableCell>GENEL TOPLAM</TableCell>
-                <TableCell className="text-right font-mono text-sm font-extrabold">{formatUSD(totalRevenue)}</TableCell>
+                <TableCell className="text-right font-mono text-sm font-extrabold">{formatUSD(totalNsb)}</TableCell>
                 <TableCell className="text-right font-mono text-sm font-extrabold">{formatUSD(totalGP)}</TableCell>
                 <TableCell className="text-right font-mono text-sm font-extrabold text-emerald-100">
-                  {totalRevenue > 0 ? `${totalGPPercent.toFixed(1)}%` : "0.0%"}
+                  {totalNsb > 0 ? `${totalGPPercent.toFixed(1)}%` : "0.0%"}
                 </TableCell>
                 <TableCell colSpan={2} />
               </TableRow>
@@ -847,16 +847,20 @@ export default function ActualsPage() {
             </DialogDescription>
           </DialogHeader>
 
-          {isPeriodLocked && (
+          {(isPeriodLocked || selectedVendor?.hasMonthlyBreakdown) && (
             <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300 rounded text-xs font-sans font-medium flex items-center gap-1.5">
               <Lock className="h-4 w-4 text-amber-600 shrink-0" />
-              <span>Bu çeyrek kilitlendiği için değerler değiştirilemez.</span>
+              <span>
+                {isPeriodLocked
+                  ? "Bu çeyrek kilitlendiği için değerler değiştirilemez."
+                  : "Excel yüklemesiyle gelen aylık kırılım verisi salt okunurdur. Güncelleme için XLS yükleyin."}
+              </span>
             </div>
           )}
 
           <form onSubmit={handleUpsertSubmit} className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label htmlFor="actual-backlog" className="text-slate-700 dark:text-slate-300 font-medium">Revenue Değeri (USD)</Label>
+              <Label htmlFor="actual-backlog" className="text-slate-700 dark:text-slate-300 font-medium">NSB Değeri (Inv.+Backl., USD)</Label>
               <div className="relative">
                 <span className="absolute left-3 top-2.5 text-slate-400 text-sm">$</span>
                 <Input
@@ -865,7 +869,7 @@ export default function ActualsPage() {
                   step="any"
                   value={backlogInput}
                   onChange={(e) => setBacklogInput(e.target.value)}
-                  disabled={isSubmitting || isPeriodLocked}
+                  disabled={isSubmitting || isPeriodLocked || selectedVendor?.hasMonthlyBreakdown}
                   placeholder="0.00"
                   className="pl-7 border-slate-200 focus-visible:ring-emerald-700 font-sans"
                 />
@@ -882,7 +886,7 @@ export default function ActualsPage() {
                   step="any"
                   value={invoicedInput}
                   onChange={(e) => setInvoicedInput(e.target.value)}
-                  disabled={isSubmitting || isPeriodLocked}
+                  disabled={isSubmitting || isPeriodLocked || selectedVendor?.hasMonthlyBreakdown}
                   placeholder="0.00"
                   className="pl-7 border-slate-200 focus-visible:ring-emerald-700 font-sans"
                 />
@@ -907,7 +911,7 @@ export default function ActualsPage() {
               >
                 {isPeriodLocked ? "Kapat" : "İptal"}
               </Button>
-              {!isPeriodLocked && (
+              {!isPeriodLocked && !selectedVendor?.hasMonthlyBreakdown && (
                 <Button
                   type="submit"
                   disabled={isSubmitting}

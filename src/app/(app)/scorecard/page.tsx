@@ -53,6 +53,11 @@ import {
 import { getManagerProfileCards, type ManagerProfileCard } from "./actions";
 import { ManagerIdentityCard } from "@/components/scorecard/manager-identity-card";
 import { CARD_HOVER_SHADOW, KPI_TILE_SHELL_XL } from "@/components/viz/card-shell";
+import {
+  getServerActionErrorMessage,
+  MAX_CRM_FILE_SIZE_MB,
+  validateCrmFileSize,
+} from "@/lib/upload-limits";
 
 interface ScorecardManagerItem {
   id: string;
@@ -262,7 +267,7 @@ export default function ScorecardPage() {
         toast.error(res.error || "CRM Excel işlenirken bir hata oluştu.");
       }
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Yükleme sırasında hata oluştu.");
+      toast.error(getServerActionErrorMessage(err, "Yükleme sırasında hata oluştu."));
     } finally {
       setIsCrmSubmitting(false);
     }
@@ -704,10 +709,25 @@ export default function ScorecardPage() {
               <Label className="text-xs font-semibold">CRM Excel Dosyası (CS1_TDSYNNEX...xlsx)</Label>
               <Input
                 type="file"
-                accept=".xlsx,.xls"
-                onChange={(e) => setCrmFile(e.target.files?.[0] ?? null)}
+                accept=".xlsx,.xls,.xlsb"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) {
+                    setCrmFile(null);
+                    return;
+                  }
+                  const validationError = validateCrmFileSize(file);
+                  if (validationError) {
+                    toast.error(validationError);
+                    e.target.value = "";
+                    setCrmFile(null);
+                    return;
+                  }
+                  setCrmFile(file);
+                }}
                 className="text-xs border-slate-200"
               />
+              <p className="text-[11px] text-slate-500">Max {MAX_CRM_FILE_SIZE_MB} MB · .xls / .xlsx / .xlsb</p>
             </div>
 
             <DialogFooter className="pt-2">
