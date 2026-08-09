@@ -9,7 +9,12 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import * as XLSX from "xlsx";
 import { parseMonthlyDetailsRows } from "@/lib/backlog/parse-monthly-details";
-import { round2 } from "@/lib/monthly";
+import {
+  actualDisplayGpTotal,
+  actualDisplayNsbTotal,
+  hasActualMonthlyBreakdown,
+  round2,
+} from "@/lib/monthly";
 
 const upsertActualSchema = z.object({
   backlog: z.number().min(0, "Backlog değeri sıfırdan küçük olamaz."),
@@ -141,11 +146,12 @@ export async function getActuals(fiscalYear: number, quarter: number, weekNumber
       vendorName: b.name,
       managerId: b.managerId,
       managerName: b.manager?.name ?? null,
-      backlog: actual ? Number(actual.backlog) : 0,
-      invoiced: actual ? Number(actual.invoiced) : 0,
+      nsbTotal: actualDisplayNsbTotal(actual),
+      gpTotal: actualDisplayGpTotal(actual),
       updatedAt: actual ? actual.updatedAt : null,
       isPeriodLocked: period.isLocked,
       hasData: Boolean(actual),
+      hasMonthlyBreakdown: actual ? hasActualMonthlyBreakdown(actual) : false,
       weekNumber: weekNumber,
     };
   });

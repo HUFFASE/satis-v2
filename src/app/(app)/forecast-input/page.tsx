@@ -60,6 +60,11 @@ import { CARD_HOVER_SHADOW } from "@/components/viz/card-shell";
 import { TrendCard, TrendMeasure } from "@/components/viz/trend-chart";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 import {
+  getServerActionErrorMessage,
+  MAX_CRM_FILE_SIZE_MB,
+  validateCrmFileSize,
+} from "@/lib/upload-limits";
+import {
   getActiveForecasts,
   getForecastVersions,
   getManagerScorecardsAction,
@@ -509,6 +514,13 @@ export default function ForecastInputPage() {
       formData.append("file", crmFile);
 
       const result = await uploadCrmExcelAction(formData, fiscalYear, quarter, crmWeekNumber);
+      if (result.requiresMapping) {
+        toast.error(
+          "Bazı markalar eşleşmedi. Marka eşleştirmesi için Scorecard & CRM sayfasından yükleyin.",
+          { duration: 8000 },
+        );
+        return;
+      }
       if (!result.success) {
         toast.error(result.error || "CRM dosyası işlenemedi.");
         return;
@@ -519,7 +531,7 @@ export default function ForecastInputPage() {
       setCrmFile(null);
       await loadForecasts();
     } catch (err: unknown) {
-      toast.error(getErrorMessage(err, "CRM Excel dosyası yüklenirken hata oluştu."));
+      toast.error(getServerActionErrorMessage(err, "CRM Excel dosyası yüklenirken hata oluştu."));
     } finally {
       setIsCrmSubmitting(false);
     }
@@ -1275,8 +1287,22 @@ export default function ForecastInputPage() {
               <Label className="text-xs font-semibold">CRM Excel Dosyası (CS1_TDSYNNEX...xlsx)</Label>
               <Input
                 type="file"
-                accept=".xlsx,.xls"
-                onChange={(e) => setCrmFile(e.target.files?.[0] ?? null)}
+                accept=".xlsx,.xls,.xlsb"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) {
+                    setCrmFile(null);
+                    return;
+                  }
+                  const validationError = validateCrmFileSize(file);
+                  if (validationError) {
+                    toast.error(validationError);
+                    e.target.value = "";
+                    setCrmFile(null);
+                    return;
+                  }
+                  setCrmFile(file);
+                }}
                 className="text-xs border-slate-200"
               />
             </div>
