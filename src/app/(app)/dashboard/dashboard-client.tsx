@@ -1,9 +1,7 @@
 "use client";
-
 import React, { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { getDashboardData } from "./actions";
 import {
   Table,
@@ -35,6 +33,7 @@ import {
 import { AchievementTile, ComparisonBar, EmptyState, ValueTile } from "@/components/viz/tiles";
 import { KPI_TILE_SHELL } from "@/components/viz/card-shell";
 import { TrendCard, TrendMeasure } from "@/components/viz/trend-chart";
+import { QuarterMultiSelect } from "@/components/ui/quarter-multi-select";
 
 type MetricSet = {
   targetRevenue: number;
@@ -51,7 +50,10 @@ type MetricSet = {
 };
 
 type WeeklyTrendPoint = {
+  quarter: number;
   weekNumber: number;
+  label: string;
+  tooltipLabel: string;
   revenue: number;
   gp: number;
   vendorCount: number;
@@ -64,8 +66,10 @@ type DashboardData = {
     weekInQuarter: number;
   };
   selectedFiscalYear: number;
-  selectedQuarter: number;
-  isCurrentQuarter: boolean;
+  selectedQuarters: number[];
+  isMixedPeriods?: boolean;
+  closedQuarters?: number[];
+  openQuarters?: number[];
   user: {
     role?: string | null;
     name?: string | null;
@@ -106,9 +110,15 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
   const [expandedManagers, setExpandedManagers] = useState<Record<string, boolean>>({});
 
   const totals = data.current;
-  const periodLabel = data.isCurrentQuarter
-    ? `FY${data.selectedFiscalYear} Q${data.selectedQuarter} - Hafta ${data.currentContext.weekInQuarter}`
-    : `FY${data.selectedFiscalYear} Q${data.selectedQuarter}`;
+  const isCurrentQuarter =
+    data.selectedQuarters.length === 1 &&
+    data.selectedQuarters[0] === data.currentContext.quarter &&
+    data.selectedFiscalYear === data.currentContext.fiscalYear;
+
+  const quartersLabel = data.selectedQuarters.map((q) => `Q${q}`).join(", ");
+  const periodLabel = isCurrentQuarter
+    ? `FY${data.selectedFiscalYear} ${quartersLabel} - Hafta ${data.currentContext.weekInQuarter}`
+    : `FY${data.selectedFiscalYear} - ${quartersLabel}`;
 
   const managerChartRows = useMemo(
     () =>
@@ -131,8 +141,8 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
   const trendMeasures: TrendMeasure[] = useMemo(() => {
     const toPoints = (pick: (point: WeeklyTrendPoint) => number) =>
       data.weeklyTrend.map((point) => ({
-        label: `H${point.weekNumber}`,
-        tooltipLabel: `Hafta ${point.weekNumber}`,
+        label: point.label,
+        tooltipLabel: point.tooltipLabel,
         value: pick(point),
         caption: `${point.vendorCount} kayıt`,
       }));
@@ -166,13 +176,11 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
     }));
   };
 
-  const selectQuarter = useCallback(
-    async (quarter: number) => {
-      if (quarter === data.selectedQuarter) return;
-
+  const handleQuartersChange = useCallback(
+    async (nextQuarters: number[]) => {
       setIsLoading(true);
       try {
-        const dashboardData = await getDashboardData(quarter);
+        const dashboardData = await getDashboardData(nextQuarters, data.selectedFiscalYear);
         setData(dashboardData);
         setExpandedManagers({});
       } catch (error: unknown) {
@@ -181,7 +189,7 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
         setIsLoading(false);
       }
     },
-    [data.selectedQuarter]
+    [data.selectedFiscalYear]
   );
 
   const hiddenAttentionCount = Math.max(0, data.attentionTotalCount - data.attentionItems.length);
@@ -194,33 +202,30 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
             Dashboard
           </h2>
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            Seçili çeyrek için hedef, forecast ve son girilen backlog görünümü.
+            Seçili çeyrek(ler) için hedef, forecast ve son girilen backlog görünümü.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge className="bg-emerald-800 text-emerald-50 hover:bg-emerald-800">{periodLabel}</Badge>
-          <div
-            className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-            role="group"
-            aria-label="Çeyrek seçimi"
-          >
-            {[1, 2, 3, 4].map((quarter) => (
-              <Button
-                key={quarter}
-                type="button"
-                size="sm"
-                variant={data.selectedQuarter === quarter ? "default" : "ghost"}
-                onClick={() => void selectQuarter(quarter)}
-                disabled={isLoading}
-                aria-pressed={data.selectedQuarter === quarter}
-                className={data.selectedQuarter === quarter ? "bg-[#2E5A43] text-white hover:bg-[#1F3A2E]" : ""}
-              >
-                Q{quarter}
-              </Button>
-            ))}
-          </div>
+          <QuarterMultiSelect
+            selectedQuarters={data.selectedQuarters}
+            onChange={(quarters) => void handleQuartersChange(quarters)}
+            disabled={isLoading}
+            allowAllShortcut
+          />
         </div>
       </div>
+
+      {data.isMixedPeriods && (
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/90 px-4 py-2.5 text-xs font-medium text-emerald-900 shadow-sm dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-300">
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[10px] font-bold text-white">
+            ✓
+          </span>
+          <span>
+            <strong>Harmanlanmış Mod:</strong> Seçilen çeyreklerde kapalı dönemler ({(data.closedQuarters ?? []).map((q) => `Q${q}`).join(", ")}) için varsa <strong>kapanış</strong>, açık dönemler ({(data.openQuarters ?? []).map((q) => `Q${q}`).join(", ")}) için <strong>forecast</strong> rakamları toplanarak sunulmaktadır.
+          </span>
+        </div>
+      )}
 
       {/* Yeniden yükleme sırasında önceki görünüm sönükleştirilerek korunur;
           iskelet gösterip düzeni sıçratmaktansa veri yerinde kalır. */}
@@ -230,21 +235,21 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
       >
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <AchievementTile
-            label="GP Achievement"
+            label={data.isMixedPeriods ? "Kapanış+Fc GP Başarımı" : "GP Achievement"}
             achievement={totals.gpAchievement}
             forecastValue={totals.forecastGp}
             targetValue={totals.targetGp}
             icon={Target}
           />
           <AchievementTile
-            label="NSB Achievement"
+            label={data.isMixedPeriods ? "Kapanış+Fc NSB Başarımı" : "NSB Achievement"}
             achievement={totals.revenueAchievement}
             forecastValue={totals.forecastRevenue}
             targetValue={totals.targetRevenue}
             icon={TrendingUp}
           />
           <ValueTile
-            label="Forecast GP%"
+            label={data.isMixedPeriods ? "Kapanış+Fc GP%" : "Forecast GP%"}
             value={formatPercent(totals.forecastGpPercent)}
             icon={Percent}
             rows={[
@@ -346,16 +351,22 @@ export default function DashboardClient({ data: initialData }: DashboardClientPr
                       <TableHead className="bg-emerald-900 text-xs font-extrabold uppercase tracking-wide text-emerald-50">
                         Satış Müdürü / Marka
                       </TableHead>
-                      {["Target GP", "Forecast GP", "GP Achv%", "GP%", "Forecast NSB", "NSB Achv%", "Backlog GP"].map(
-                        (heading) => (
-                          <TableHead
-                            key={heading}
-                            className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50"
-                          >
-                            {heading}
-                          </TableHead>
-                        )
-                      )}
+                      {[
+                        "Target GP",
+                        data.isMixedPeriods ? "Kapanış+Fc GP" : "Forecast GP",
+                        "GP Achv%",
+                        "GP%",
+                        data.isMixedPeriods ? "Kapanış+Fc NSB" : "Forecast NSB",
+                        "NSB Achv%",
+                        "Backlog GP",
+                      ].map((heading) => (
+                        <TableHead
+                          key={heading}
+                          className="bg-emerald-900 text-right text-xs font-extrabold uppercase tracking-wide text-emerald-50"
+                        >
+                          {heading}
+                        </TableHead>
+                      ))}
                     </TableRow>
                   </TableHeader>
                   <TableBody>

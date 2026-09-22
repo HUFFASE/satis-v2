@@ -139,6 +139,8 @@ describe("Aylık kırılım yardımcıları", () => {
   it("Actual GP toplamını aylık invoiced/backlog GP'den hesaplar", () => {
     expect(
       actualDisplayGpTotal({
+        invoicedNsbM1: 0, invoicedNsbM2: 0, invoicedNsbM3: 0,
+        backlogNsbM1: 0, backlogNsbM2: 0, backlogNsbM3: 0,
         invoicedGpM1: 100,
         invoicedGpM2: 200,
         invoicedGpM3: 300,

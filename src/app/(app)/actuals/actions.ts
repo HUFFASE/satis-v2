@@ -76,20 +76,30 @@ function makeImportKey(vendorId: string, fiscalPeriodId: string, weekNumber: num
 }
 
 /**
- * Retrieves the list of actuals for accessible vendors at a specific fiscal year, quarter, and week number.
- * Missing rows are returned as 0 on-the-fly.
+ * Retrieves the list of actuals for accessible vendors at specific fiscal year, quarters, and week number.
+ * If multiple quarters are selected, sums the actuals for each vendor.
  */
-export async function getActuals(fiscalYear: number, quarter: number, weekNumber: number) {
+export async function getActuals(fiscalYear: number, quarters: number[] | number, weekNumber: number) {
   const session = await auth();
   if (!session?.user) {
     throw new Error("Oturum açık değil.");
   }
 
+  const list = Array.isArray(quarters) ? quarters : [quarters];
+  const validQuarters = Array.from(
+    new Set(list.filter((q) => Number.isInteger(q) && q >= 1 && q <= 4))
+  ).sort((a, b) => a - b);
+  const selectedQuarters = validQuarters.length > 0 ? validQuarters : [1];
+
   // 1. Get scoped active vendor IDs
   const accessibleVendorIds = await getAccessibleVendorIds(session.user);
 
-  // 2. Resolve database FiscalPeriod row
-  const period = await ensureFiscalPeriod(fiscalYear, quarter);
+  // 2. Resolve database FiscalPeriod rows
+  const periods = await Promise.all(
+    selectedQuarters.map((quarter) => ensureFiscalPeriod(fiscalYear, quarter))
+  );
+  const periodIds = periods.map((period) => period.id);
+  const anyPeriodLocked = periods.some((period) => period.isLocked);
 
   // 3. Fetch canonical vendors that the user has authorization for
   const vendors = await prisma.vendor.findMany({
@@ -110,20 +120,19 @@ export async function getActuals(fiscalYear: number, quarter: number, weekNumber
     orderBy: { name: "asc" },
   });
 
-  // 4. Query actual entries matching accessible vendors, fiscal period, and week number
+  // 4. Query actual entries matching accessible vendors, fiscal periods, and week number
   const actuals = await prisma.actual.findMany({
     where: {
-      fiscalPeriodId: period.id,
+      fiscalPeriodId: { in: periodIds },
       vendorId: { in: accessibleVendorIds },
       weekNumber,
     },
   });
-  const actualMap = new Map(actuals.map((a) => [a.vendorId, a]));
 
   const [latestActual, maxWeekActual] = await Promise.all([
     prisma.actual.findFirst({
       where: {
-        fiscalPeriodId: period.id,
+        fiscalPeriodId: { in: periodIds },
         vendorId: { in: accessibleVendorIds },
       },
       orderBy: { updatedAt: "desc" },
@@ -131,7 +140,7 @@ export async function getActuals(fiscalYear: number, quarter: number, weekNumber
     }),
     prisma.actual.findFirst({
       where: {
-        fiscalPeriodId: period.id,
+        fiscalPeriodId: { in: periodIds },
         vendorId: { in: accessibleVendorIds },
       },
       orderBy: { weekNumber: "desc" },
@@ -139,19 +148,63 @@ export async function getActuals(fiscalYear: number, quarter: number, weekNumber
     }),
   ]);
 
+  if (selectedQuarters.length === 1) {
+    const actualMap = new Map(actuals.map((a) => [a.vendorId, a]));
+    const period = periods[0];
+    const rows = vendors.map((b) => {
+      const actual = actualMap.get(b.id);
+      return {
+        vendorId: b.id,
+        vendorName: b.name,
+        managerId: b.managerId,
+        managerName: b.manager?.name ?? null,
+        nsbTotal: actualDisplayNsbTotal(actual),
+        gpTotal: actualDisplayGpTotal(actual),
+        updatedAt: actual ? actual.updatedAt : null,
+        isPeriodLocked: period.isLocked,
+        hasData: Boolean(actual),
+        hasMonthlyBreakdown: actual ? hasActualMonthlyBreakdown(actual) : false,
+        weekNumber: weekNumber,
+      };
+    });
+
+    return {
+      rows,
+      latestUploadWeekNumber: latestActual?.weekNumber ?? maxWeekActual?.weekNumber ?? null,
+      latestUploadAt: latestActual?.updatedAt ?? null,
+    };
+  }
+
+  // Çoklu çeyrek toplamı
+  const vendorSums = new Map<
+    string,
+    { nsbTotal: number; gpTotal: number; updatedAt: Date | null; count: number }
+  >();
+
+  for (const a of actuals) {
+    const existing = vendorSums.get(a.vendorId) ?? { nsbTotal: 0, gpTotal: 0, updatedAt: null, count: 0 };
+    existing.nsbTotal += actualDisplayNsbTotal(a);
+    existing.gpTotal += actualDisplayGpTotal(a);
+    existing.count += 1;
+    if (!existing.updatedAt || (a.updatedAt && a.updatedAt > existing.updatedAt)) {
+      existing.updatedAt = a.updatedAt;
+    }
+    vendorSums.set(a.vendorId, existing);
+  }
+
   const rows = vendors.map((b) => {
-    const actual = actualMap.get(b.id);
+    const sum = vendorSums.get(b.id);
     return {
       vendorId: b.id,
       vendorName: b.name,
       managerId: b.managerId,
       managerName: b.manager?.name ?? null,
-      nsbTotal: actualDisplayNsbTotal(actual),
-      gpTotal: actualDisplayGpTotal(actual),
-      updatedAt: actual ? actual.updatedAt : null,
-      isPeriodLocked: period.isLocked,
-      hasData: Boolean(actual),
-      hasMonthlyBreakdown: actual ? hasActualMonthlyBreakdown(actual) : false,
+      nsbTotal: sum ? sum.nsbTotal : 0,
+      gpTotal: sum ? sum.gpTotal : 0,
+      updatedAt: sum ? sum.updatedAt : null,
+      isPeriodLocked: anyPeriodLocked,
+      hasData: Boolean(sum && sum.count > 0),
+      hasMonthlyBreakdown: false,
       weekNumber: weekNumber,
     };
   });
@@ -407,15 +460,6 @@ export async function importBacklogFromXls(
 
       const importKey = makeImportKey(vendor.id, period.id, weekNumber);
       const existingRow = importRows.get(importKey);
-
-      const mergeTriple = (
-        current: [number, number, number] | undefined,
-        next: [number, number, number],
-      ): [number, number, number] => [
-        round2((current?.[0] ?? 0) + next[0]),
-        round2((current?.[1] ?? 0) + next[1]),
-        round2((current?.[2] ?? 0) + next[2]),
-      ];
 
       importRows.set(importKey, {
         vendorId: vendor.id,

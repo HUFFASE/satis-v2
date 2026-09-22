@@ -1,5 +1,4 @@
 "use client";
-
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -22,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuarterMultiSelect } from "@/components/ui/quarter-multi-select";
 import {
   Table,
   TableBody,
@@ -61,7 +61,6 @@ import { TrendCard, TrendMeasure } from "@/components/viz/trend-chart";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 import {
   getServerActionErrorMessage,
-  MAX_CRM_FILE_SIZE_MB,
   validateCrmFileSize,
 } from "@/lib/upload-limits";
 import {
@@ -175,7 +174,7 @@ function formatDate(value: Date | string | null) {
 export default function ForecastInputPage() {
   const currentContext = getCurrentFiscalContext();
   const [fiscalYear, setFiscalYear] = useState(currentContext.fiscalYear);
-  const [quarter, setQuarter] = useState(currentContext.quarter);
+  const [selectedQuarters, setSelectedQuarters] = useState<number[]>([currentContext.quarter]);
   const [forecasts, setForecasts] = useState<ForecastRow[]>([]);
   const [user, setUser] = useState<{ role?: string | null } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -254,8 +253,14 @@ export default function ForecastInputPage() {
     });
   }, [forecasts, selectedManagerIds, selectedVendorIds]);
 
+  const quarter = useMemo(
+    () => selectedQuarters[0] ?? currentContext.quarter,
+    [selectedQuarters, currentContext.quarter],
+  );
   const isSelectedCurrentPeriod =
-    fiscalYear === currentContext.fiscalYear && quarter === currentContext.quarter;
+    selectedQuarters.length === 1 &&
+    fiscalYear === currentContext.fiscalYear &&
+    quarter === currentContext.quarter;
   const isPeriodLocked = forecasts.some((row) => row.isPeriodLocked);
 
   const fiscalYearsRange = [
@@ -274,6 +279,9 @@ export default function ForecastInputPage() {
   const [isScorecardLeaderboardOpen, setIsScorecardLeaderboardOpen] = useState(false);
 
   const [latestUploadWeekNumber, setLatestUploadWeekNumber] = useState<number | null>(null);
+  const [isMixedPeriods, setIsMixedPeriods] = useState(false);
+  const [closedQuarters, setClosedQuarters] = useState<number[]>([]);
+  const [openQuarters, setOpenQuarters] = useState<number[]>([]);
 
   const loadForecasts = useCallback(async () => {
     setIsLoading(true);
@@ -281,13 +289,16 @@ export default function ForecastInputPage() {
       const activeCtx = getCurrentFiscalContext();
       const selectedWeekParam = viewWeekNumber === "active" ? activeCtx.weekInQuarter : viewWeekNumber;
       const [res, trendData, scorecardData, vendorScorecardData] = await Promise.all([
-        getActiveForecasts(fiscalYear, quarter, viewWeekNumber === "active" ? undefined : viewWeekNumber),
-        getWeeklyForecastTrend(fiscalYear, quarter),
-        getManagerScorecardsAction(fiscalYear, quarter, selectedWeekParam),
-        getVendorScorecardsAction(fiscalYear, quarter, selectedWeekParam),
+        getActiveForecasts(fiscalYear, selectedQuarters, viewWeekNumber === "active" ? undefined : viewWeekNumber),
+        getWeeklyForecastTrend(fiscalYear, selectedQuarters),
+        getManagerScorecardsAction(fiscalYear, selectedQuarters, selectedWeekParam),
+        getVendorScorecardsAction(fiscalYear, selectedQuarters, selectedWeekParam),
       ]);
       setForecasts(res.rows);
       setLatestUploadWeekNumber(res.latestUploadWeekNumber);
+      setIsMixedPeriods(Boolean(res.isMixedPeriods));
+      setClosedQuarters(res.closedQuarters ?? []);
+      setOpenQuarters(res.openQuarters ?? []);
       setWeeklyTrend(trendData);
       setScorecards(scorecardData);
       setVendorScorecards(vendorScorecardData);
@@ -296,7 +307,7 @@ export default function ForecastInputPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [fiscalYear, quarter, viewWeekNumber]);
+  }, [fiscalYear, selectedQuarters, viewWeekNumber]);
 
   useEffect(() => {
     void Promise.resolve().then(async () => {
@@ -583,19 +594,12 @@ export default function ForecastInputPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-500">Çeyrek:</span>
-            <Select value={quarter.toString()} onValueChange={(value) => setQuarter(Number(value))}>
-              <SelectTrigger className="h-8 w-20 border-slate-200 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-white border-slate-200">
-                {[1, 2, 3, 4].map((q) => (
-                  <SelectItem key={q} value={q.toString()} className="text-xs">
-                    Q{q}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <QuarterMultiSelect
+              selectedQuarters={selectedQuarters}
+              onChange={setSelectedQuarters}
+              disabled={isLoading}
+              allowAllShortcut
+            />
           </div>
 
           <div className="flex items-center gap-2 border-l border-slate-200 pl-3 dark:border-slate-800">
@@ -636,6 +640,17 @@ export default function ForecastInputPage() {
           )}
         </div>
       </div>
+
+      {isMixedPeriods && selectedQuarters.length > 1 && (
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/90 px-4 py-2.5 text-xs font-medium text-emerald-900 shadow-sm dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-300">
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[10px] font-bold text-white">
+            ✓
+          </span>
+          <span>
+            <strong>Harmanlanmış Mod:</strong> Seçilen çeyreklerde kapalı dönemler ({closedQuarters.map((q) => `Q${q}`).join(", ")}) için varsa <strong>kapanış</strong>, açık dönemler ({openQuarters.map((q) => `Q${q}`).join(", ")}) için <strong>forecast</strong> rakamları toplanarak sunulmaktadır.
+          </span>
+        </div>
+      )}
 
       {/* Forecast girişi Haftalık Detay Formu'na taşındı — bu sayfa artık
           salt-okunur özet ve geçmiş görünümüdür. */}

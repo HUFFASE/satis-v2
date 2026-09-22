@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuarterMultiSelect } from "@/components/ui/quarter-multi-select";
 import {
   Table,
   TableBody,
@@ -108,7 +109,9 @@ function AccuracyTile({ label, value, icon: Icon }: { label: string; value: numb
 export default function ForecastHistoryClient({ initialData }: ForecastHistoryClientProps) {
   const currentContext = getCurrentFiscalContext();
   const [fiscalYear, setFiscalYear] = useState(initialData.fiscalYear);
-  const [quarter, setQuarter] = useState(initialData.quarter);
+  const [selectedQuarters, setSelectedQuarters] = useState<number[]>(
+    initialData.selectedQuarters ?? [initialData.quarter]
+  );
   const [data, setData] = useState(initialData);
   const [isLoading, setIsLoading] = useState(false);
   const [viewMode, setViewMode] = useState<HistoryViewMode>("manager");
@@ -244,7 +247,7 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const result = await getForecastHistoryData(fiscalYear, quarter);
+      const result = await getForecastHistoryData(fiscalYear, selectedQuarters);
       setData(result);
       setExpandedManagers({});
       setExpandedVendors({});
@@ -253,7 +256,8 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
     } finally {
       setIsLoading(false);
     }
-  }, [fiscalYear, quarter]);
+  }, [fiscalYear, selectedQuarters]);
+
 
   useEffect(() => {
     void Promise.resolve().then(loadData);
@@ -376,20 +380,14 @@ export default function ForecastHistoryClient({ initialData }: ForecastHistoryCl
               ))}
             </SelectContent>
           </Select>
-          <Select value={quarter.toString()} onValueChange={(value) => setQuarter(Number(value))}>
-            <SelectTrigger className="h-8 w-20 border-slate-200 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="bg-white border-slate-200">
-              {[1, 2, 3, 4].map((q) => (
-                <SelectItem key={q} value={q.toString()} className="text-xs">
-                  Q{q}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <QuarterMultiSelect
+            selectedQuarters={selectedQuarters}
+            onChange={setSelectedQuarters}
+            disabled={isLoading}
+            allowAllShortcut
+          />
           <Badge className="bg-emerald-800 text-emerald-50 hover:bg-emerald-800">
-            FY{fiscalYear} Q{quarter}
+            FY{fiscalYear} - {selectedQuarters.map((q) => `Q${q}`).join(", ")}
           </Badge>
         </div>
       </div>

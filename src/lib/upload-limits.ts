@@ -1,6 +1,6 @@
 /** next.config.ts serverActions.bodySizeLimit ile uyumlu */
-export const MAX_CRM_FILE_SIZE_BYTES = 15 * 1024 * 1024;
-export const MAX_CRM_FILE_SIZE_MB = 15;
+export const MAX_CRM_FILE_SIZE_BYTES = 40 * 1024 * 1024;
+export const MAX_CRM_FILE_SIZE_MB = 40;
 
 export function getServerActionErrorMessage(error: unknown, fallback: string) {
   if (!(error instanceof Error)) return fallback;

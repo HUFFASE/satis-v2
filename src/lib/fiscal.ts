@@ -223,3 +223,40 @@ export function getMonthIndexInQuarter(
   }
   return null;
 }
+
+/**
+ * Bir mali çeyreğin kapalı olup olmadığını belirler.
+ * Kural:
+ * 1. Eğer dönem veritabanında kilitlendiyse (isLocked === true) -> kapalı
+ * 2. Eğer dönemin mali yılı cari yıldan küçükse -> kapalı
+ * 3. Eğer mali yıl cari yıla eşit ama çeyrek cari çeyrekten küçükse -> kapalı
+ */
+export function isFiscalPeriodClosed(
+  period: { fiscalYear: number; quarter: number; isLocked?: boolean | null },
+  currentContext: FiscalContext
+): boolean {
+  if (period.isLocked) return true;
+  if (period.fiscalYear < currentContext.fiscalYear) return true;
+  if (period.fiscalYear === currentContext.fiscalYear && period.quarter < currentContext.quarter) return true;
+  return false;
+}
+
+/**
+ * Seçilen çeyrekler arasında hem kapalı hem de açık çeyreklerin bulunup bulunmadığını kontrol eder.
+ */
+export function hasMixedFiscalPeriods(
+  periods: Array<{ fiscalYear: number; quarter: number; isLocked?: boolean | null }>,
+  currentContext: FiscalContext
+): boolean {
+  let hasClosed = false;
+  let hasOpen = false;
+  for (const period of periods) {
+    if (isFiscalPeriodClosed(period, currentContext)) {
+      hasClosed = true;
+    } else {
+      hasOpen = true;
+    }
+    if (hasClosed && hasOpen) return true;
+  }
+  return false;
+}

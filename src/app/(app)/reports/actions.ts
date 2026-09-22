@@ -2,6 +2,7 @@
 
 import { auth } from "@/auth";
 import { ensureFiscalPeriod } from "@/lib/fiscal-db";
+import { getFiscalContext, hasMixedFiscalPeriods, isFiscalPeriodClosed } from "@/lib/fiscal";
 import prisma from "@/lib/prisma";
 import { getAccessibleVendorIds } from "@/lib/scope";
 
@@ -15,6 +16,8 @@ function emptyMetrics() {
     forecastGp: 0,
     closingRevenue: 0,
     closingGp: 0,
+    blendedRevenue: 0,
+    blendedGp: 0,
     backlogRevenue: 0,
     backlogGp: 0,
   };
@@ -27,6 +30,8 @@ function addMetrics(base: Metrics, part: Partial<Metrics>) {
   base.forecastGp += part.forecastGp ?? 0;
   base.closingRevenue += part.closingRevenue ?? 0;
   base.closingGp += part.closingGp ?? 0;
+  base.blendedRevenue += part.blendedRevenue ?? 0;
+  base.blendedGp += part.blendedGp ?? 0;
   base.backlogRevenue += part.backlogRevenue ?? 0;
   base.backlogGp += part.backlogGp ?? 0;
   return base;
@@ -51,6 +56,7 @@ function enrichMetrics(metrics: Metrics) {
     targetGpPercent: calculateGpPercent(metrics.targetRevenue, metrics.targetGp),
     forecastGpPercent: calculateGpPercent(metrics.forecastRevenue, metrics.forecastGp),
     closingGpPercent: calculateGpPercent(metrics.closingRevenue, metrics.closingGp),
+    blendedGpPercent: calculateGpPercent(metrics.blendedRevenue, metrics.blendedGp),
     backlogGpPercent: calculateGpPercent(metrics.backlogRevenue, metrics.backlogGp),
     closingRevenueAchievement: calculatePercent(metrics.closingRevenue, metrics.targetRevenue),
     closingGpAchievement: calculatePercent(metrics.closingGp, metrics.targetGp),
@@ -58,6 +64,8 @@ function enrichMetrics(metrics: Metrics) {
     forecastGpAccuracy: calculateAccuracy(metrics.forecastGp, metrics.closingGp),
     forecastRevenueVsTarget: calculatePercent(metrics.forecastRevenue, metrics.targetRevenue),
     forecastGpVsTarget: calculatePercent(metrics.forecastGp, metrics.targetGp),
+    blendedRevenueAchievement: calculatePercent(metrics.blendedRevenue, metrics.targetRevenue),
+    blendedGpAchievement: calculatePercent(metrics.blendedGp, metrics.targetGp),
   };
 }
 
@@ -76,6 +84,7 @@ export async function getReportsData(fiscalYear: number, quarters: number[]) {
   const session = await auth();
   if (!session?.user) throw new Error("Oturum açık değil.");
 
+  const current = getFiscalContext(new Date());
   const selectedQuarters = normalizeQuarters(quarters);
   const accessibleVendorIds = await getAccessibleVendorIds(session.user);
   const periods = await Promise.all(
@@ -84,6 +93,10 @@ export async function getReportsData(fiscalYear: number, quarters: number[]) {
   const periodIds = periods.map((period) => period.id);
   const periodById = new Map(periods.map((period) => [period.id, period]));
   const quarterByPeriodId = new Map(periods.map((period) => [period.id, period.quarter]));
+
+  const isMixedPeriods = hasMixedFiscalPeriods(periods, current);
+  const closedQuarters = periods.filter((p) => isFiscalPeriodClosed(p, current)).map((p) => p.quarter);
+  const openQuarters = periods.filter((p) => !isFiscalPeriodClosed(p, current)).map((p) => p.quarter);
 
   const [vendors, targets, forecasts, closings, actuals] = await Promise.all([
     prisma.vendor.findMany({
@@ -156,8 +169,13 @@ export async function getReportsData(fiscalYear: number, quarters: number[]) {
   for (const actual of actuals) {
     const period = periodById.get(actual.fiscalPeriodId);
     if (!period) continue;
+    const isClosed = isFiscalPeriodClosed(period, current);
     const metrics = vendorPeriodMetrics.get(metricKey(actual.vendorId, actual.fiscalPeriodId)) ?? emptyMetrics();
-    const part = { backlogRevenue: Number(actual.backlog), backlogGp: Number(actual.invoiced) };
+    // Kapanmış çeyreklerin bekleyen backlog'u satışa döndüğü için 0 sayılır; mükerrer sayılmaz
+    const part = {
+      backlogRevenue: isClosed ? 0 : Number(actual.backlog),
+      backlogGp: isClosed ? 0 : Number(actual.invoiced),
+    };
     addMetrics(metrics, part);
     addMetrics(totals, part);
     addMetrics(quarterMap.get(period.quarter) ?? emptyMetrics(), part);
@@ -173,6 +191,33 @@ export async function getReportsData(fiscalYear: number, quarters: number[]) {
       };
     addMetrics(weekly, part);
     weeklyMap.set(weeklyKey, weekly);
+  }
+
+  // Harmanlanmış metrikleri (Kapalı çeyrekte varsa Kapanış, yoksa Forecast; Açık çeyrekte Forecast) hesapla
+  for (const vendor of vendors) {
+    for (const period of periods) {
+      const key = metricKey(vendor.id, period.id);
+      const metrics = vendorPeriodMetrics.get(key) ?? emptyMetrics();
+      const isClosed = isFiscalPeriodClosed(period, current);
+
+      if (isClosed) {
+        if (metrics.closingRevenue > 0 || metrics.closingGp > 0) {
+          metrics.blendedRevenue = metrics.closingRevenue;
+          metrics.blendedGp = metrics.closingGp;
+        } else {
+          metrics.blendedRevenue = metrics.forecastRevenue;
+          metrics.blendedGp = metrics.forecastGp;
+        }
+      } else {
+        metrics.blendedRevenue = metrics.forecastRevenue;
+        metrics.blendedGp = metrics.forecastGp;
+      }
+
+      vendorPeriodMetrics.set(key, metrics);
+      const blendedPart = { blendedRevenue: metrics.blendedRevenue, blendedGp: metrics.blendedGp };
+      addMetrics(totals, blendedPart);
+      addMetrics(quarterMap.get(period.quarter) ?? emptyMetrics(), blendedPart);
+    }
   }
 
   const closingKeys = new Set(closings.map((closing) => metricKey(closing.vendorId, closing.fiscalPeriodId)));
@@ -312,6 +357,9 @@ export async function getReportsData(fiscalYear: number, quarters: number[]) {
   return {
     fiscalYear,
     quarters: selectedQuarters,
+    isMixedPeriods,
+    closedQuarters,
+    openQuarters,
     totals: enrichMetrics(totals),
     managers,
     quarterSummary,

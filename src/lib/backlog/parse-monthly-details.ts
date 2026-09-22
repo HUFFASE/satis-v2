@@ -34,8 +34,6 @@ const MONTH_ABBREVS = [
   "dec",
 ] as const;
 
-const EMPTY_TRIPLE: MonthlyTriple = [0, 0, 0];
-
 function zeros(): Record<BacklogMetricKey, MonthlyTriple> {
   return {
     invoicedNsb: [0, 0, 0],

@@ -1,10 +1,7 @@
 "use client";
-
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -12,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuarterMultiSelect } from "@/components/ui/quarter-multi-select";
 import {
   Table,
   TableBody,
@@ -22,23 +20,18 @@ import {
 } from "@/components/ui/table";
 import { toast } from "sonner";
 import {
-  BarChart3,
   ChevronDown,
   ChevronRight,
   Loader2,
   Building2,
   Users2,
-  AlertTriangle,
-  Coins,
   ShieldCheck,
-  TrendingUp,
   Info,
 } from "lucide-react";
 import {
   getCrmAnalyticsDataAction,
   SmCrmAnalyticsItem,
   AccountManagerPerformanceItem,
-  WeeklyHygieneTrendItem,
 } from "./actions";
 import { BrandDetailDialog } from "@/components/crm-analytics/brand-detail-dialog";
 import { CARD_HOVER_SHADOW, KPI_TILE_SHELL_XL } from "@/components/viz/card-shell";
@@ -62,13 +55,12 @@ function formatTRY(value: number) {
 export default function CrmAnalyticsPage() {
   const currentContext = getCurrentFiscalContext();
   const [fiscalYear, setFiscalYear] = useState<number>(currentContext.fiscalYear);
-  const [quarter, setQuarter] = useState<number>(currentContext.quarter);
+  const [selectedQuarters, setSelectedQuarters] = useState<number[]>([currentContext.quarter]);
   const [weekNumber, setWeekNumber] = useState<number>(currentContext.weekInQuarter);
 
   const [isLoading, setIsLoading] = useState(true);
   const [smItems, setSmItems] = useState<SmCrmAnalyticsItem[]>([]);
   const [amList, setAmList] = useState<AccountManagerPerformanceItem[]>([]);
-  const [weeklyTrend, setWeeklyTrend] = useState<WeeklyHygieneTrendItem[]>([]);
   const [totalDeals, setTotalDeals] = useState<number>(0);
 
   // Accordion open state: Set of SM IDs that are expanded
@@ -94,24 +86,30 @@ export default function CrmAnalyticsPage() {
     });
   };
 
-  const loadData = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const res = await getCrmAnalyticsDataAction(fiscalYear, quarter, weekNumber);
-      setSmItems(res.smAnalyticsItems);
-      setAmList(res.amList);
-      setWeeklyTrend(res.weeklyTrend);
-      setTotalDeals(res.totalDealsInQuarter);
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "CRM Verileri yüklenirken hata oluştu.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [fiscalYear, quarter, weekNumber]);
+  const quarter = selectedQuarters[0] ?? currentContext.quarter;
 
   useEffect(() => {
-    void loadData();
-  }, [loadData]);
+    let cancelled = false;
+    // Schedule the fetch after the effect and ignore results from older filters.
+    void Promise.resolve().then(async () => {
+      if (cancelled) return;
+      setIsLoading(true);
+      try {
+        const res = await getCrmAnalyticsDataAction(fiscalYear, selectedQuarters, weekNumber);
+        if (cancelled) return;
+        setSmItems(res.smAnalyticsItems);
+        setAmList(res.amList);
+        setTotalDeals(res.totalDealsInQuarter);
+      } catch (err: unknown) {
+        if (!cancelled) {
+          toast.error(err instanceof Error ? err.message : "CRM Verileri yüklenirken hata oluştu.");
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [fiscalYear, selectedQuarters, weekNumber]);
 
   // Overall Aggregates
   const totalRawUSD = useMemo(() => smItems.reduce((acc, item) => acc + item.rawPipeline, 0), [smItems]);
@@ -157,18 +155,12 @@ export default function CrmAnalyticsPage() {
           </div>
 
           <div className="flex items-center gap-1.5">
-            <span className="text-xs font-semibold text-slate-500">Çeyrek:</span>
-            <Select value={quarter.toString()} onValueChange={(v) => v && setQuarter(Number(v))}>
-              <SelectTrigger className="h-8 w-20 text-xs font-bold border-slate-200">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-white border-slate-200">
-                <SelectItem value="1" className="text-xs">Q1</SelectItem>
-                <SelectItem value="2" className="text-xs">Q2</SelectItem>
-                <SelectItem value="3" className="text-xs">Q3</SelectItem>
-                <SelectItem value="4" className="text-xs">Q4</SelectItem>
-              </SelectContent>
-            </Select>
+            <QuarterMultiSelect
+              selectedQuarters={selectedQuarters}
+              onChange={setSelectedQuarters}
+              disabled={isLoading}
+              allowAllShortcut
+            />
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -250,7 +242,7 @@ export default function CrmAnalyticsPage() {
                 {fiscalYear} - Q{quarter} Hafta {weekNumber} dönemi için henüz CRM Excel verisi yüklenmemiştir.
               </span>
               <span className="text-slate-400">
-                "Scorecard & CRM" sayfasından CS1_TDSYNNEX Excel dosyasını yükleyerek verileri aktarabilirsiniz.
+                &quot;Scorecard & CRM&quot; sayfasından CS1_TDSYNNEX Excel dosyasını yükleyerek verileri aktarabilirsiniz.
               </span>
             </div>
           ) : (
@@ -404,7 +396,7 @@ export default function CrmAnalyticsPage() {
               Account Manager (OWNER) Bazlı CRM Performans & Hijyen Tablosu
             </h2>
           </div>
-          <span className="text-[11px] text-slate-400">Excel'deki OWNER temsilcilerinin kapanan işleri, ciroları ve hijyen puanları</span>
+          <span className="text-[11px] text-slate-400">Excel&apos;deki OWNER temsilcilerinin kapanan işleri, ciroları ve hijyen puanları</span>
         </div>
 
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">

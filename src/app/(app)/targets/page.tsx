@@ -29,6 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuarterMultiSelect } from "@/components/ui/quarter-multi-select";
 import {
   Loader2,
   Target,
@@ -98,7 +99,7 @@ export default function TargetsPage() {
   const currentContext = getCurrentFiscalContext();
 
   const [fiscalYear, setFiscalYear] = useState<number>(currentContext.fiscalYear);
-  const [quarter, setQuarter] = useState<number>(currentContext.quarter);
+  const [selectedQuarters, setSelectedQuarters] = useState<number[]>([currentContext.quarter]);
   const [targets, setTargets] = useState<TargetRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState<{ role?: string | null } | null>(null);
@@ -134,14 +135,14 @@ export default function TargetsPage() {
   const loadTargets = useCallback(async () => {
     setIsLoading(true);
     try {
-      const data = await getTargets(fiscalYear, quarter);
+      const data = await getTargets(fiscalYear, selectedQuarters);
       setTargets(data);
     } catch (err: unknown) {
       toast.error(getErrorMessage(err, "Hedefler yüklenirken hata oluştu."));
     } finally {
       setIsLoading(false);
     }
-  }, [fiscalYear, quarter]);
+  }, [fiscalYear, selectedQuarters]);
 
   useEffect(() => {
     const loadTask = Promise.resolve().then(loadTargets);
@@ -151,6 +152,10 @@ export default function TargetsPage() {
   }, [loadTargets]);
 
   const handleOpenEdit = (row: TargetRow) => {
+    if (selectedQuarters.length > 1) {
+      toast.info("Hedef düzenlemek için tek bir çeyrek seçiniz.");
+      return;
+    }
     setSelectedVendor(row);
     // Aylık kırılım varsa onunla, yoksa boş başlat — çeyrek toplamını üçe
     // bölmek uydurma dağılım üretirdi.
@@ -165,6 +170,7 @@ export default function TargetsPage() {
     setIsEditModalOpen(true);
   };
 
+  const quarter = selectedQuarters[0] ?? currentContext.quarter;
   /** Seçili çeyreğin ay adları, ör. Haziran 2026 / Temmuz 2026 / Ağustos 2026 */
   const monthLabels = getQuarterMonthLabels(fiscalYear, quarter);
 
@@ -517,22 +523,12 @@ export default function TargetsPage() {
           <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-700" />
 
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-500 font-sans">Çeyrek:</span>
-            <Select
-              value={quarter.toString()}
-              onValueChange={(val) => { if (val) setQuarter(parseInt(val)); }}
-            >
-              <SelectTrigger className="h-8 w-20 border-slate-200 text-xs font-medium focus:outline-none">
-                <SelectValue placeholder="Çeyrek" />
-              </SelectTrigger>
-              <SelectContent className="bg-white border-slate-200">
-                {[1, 2, 3, 4].map((q) => (
-                  <SelectItem key={q} value={q.toString()} className="text-xs font-sans">
-                    Q{q}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <QuarterMultiSelect
+              selectedQuarters={selectedQuarters}
+              onChange={setSelectedQuarters}
+              disabled={isLoading}
+              allowAllShortcut
+            />
           </div>
         </div>
       </div>

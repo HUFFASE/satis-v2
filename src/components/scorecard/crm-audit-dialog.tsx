@@ -59,10 +59,10 @@ export function CrmAuditDialog({
   // Sorted deals
   const sortedDeals = useMemo(() => {
     return searchFiltered.slice().sort((a, b) => {
-      let aVal: any = a[sortField];
-      let bVal: any = b[sortField];
+      let aVal = a[sortField];
+      let bVal = b[sortField];
 
-      if (typeof aVal === "string") {
+      if (typeof aVal === "string" && typeof bVal === "string") {
         aVal = aVal.toLowerCase();
         bVal = (bVal || "").toLowerCase();
       }

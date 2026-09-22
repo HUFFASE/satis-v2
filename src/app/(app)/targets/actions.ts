@@ -198,20 +198,30 @@ function makeImportKey(vendorId: string, fiscalPeriodId: string) {
 }
 
 /**
- * Returns the targets list for accessible vendors in a selected fiscal quarter.
- * Inserts missing targets as 0 on-the-fly.
+ * Returns the targets list for accessible vendors in selected fiscal quarters.
+ * If multiple quarters are selected, sums the targets for each vendor.
  */
-export async function getTargets(fiscalYear: number, quarter: number) {
+export async function getTargets(fiscalYear: number, quarters: number[] | number) {
   const session = await auth();
   if (!session?.user) {
     throw new Error("Oturum açık değil.");
   }
 
+  const list = Array.isArray(quarters) ? quarters : [quarters];
+  const validQuarters = Array.from(
+    new Set(list.filter((q) => Number.isInteger(q) && q >= 1 && q <= 4))
+  ).sort((a, b) => a - b);
+  const selectedQuarters = validQuarters.length > 0 ? validQuarters : [1];
+
   // 1. Get user scoped active vendor IDs
   const accessibleVendorIds = await getAccessibleVendorIds(session.user);
 
-  // 2. Resolve database FiscalPeriod row
-  const period = await ensureFiscalPeriod(fiscalYear, quarter);
+  // 2. Resolve database FiscalPeriod rows
+  const periods = await Promise.all(
+    selectedQuarters.map((quarter) => ensureFiscalPeriod(fiscalYear, quarter))
+  );
+  const periodIds = periods.map((period) => period.id);
+  const anyPeriodLocked = periods.some((period) => period.isLocked);
 
   // 3. Fetch canonical vendors that user has authorization for
   const vendors = await prisma.vendor.findMany({
@@ -232,32 +242,60 @@ export async function getTargets(fiscalYear: number, quarter: number) {
     orderBy: { name: "asc" },
   });
 
-  // 4. Query target entries matching accessible vendors and fiscal period
+  // 4. Query target entries matching accessible vendors and fiscal periods
   const targets = await prisma.target.findMany({
     where: {
-      fiscalPeriodId: period.id,
+      fiscalPeriodId: { in: periodIds },
       vendorId: { in: accessibleVendorIds },
     },
   });
 
-  const targetMap = new Map(targets.map((t) => [t.vendorId, t]));
+  if (selectedQuarters.length === 1) {
+    const targetMap = new Map(targets.map((t) => [t.vendorId, t]));
+    const period = periods[0];
+    return vendors.map((b) => {
+      const target = targetMap.get(b.id);
+      const monthly = monthlyTriples(target);
+      return {
+        vendorId: b.id,
+        vendorName: b.name,
+        managerId: b.managerId,
+        managerName: b.manager?.name ?? null,
+        revenue: target ? Number(target.revenue) : 0,
+        gp: target ? Number(target.gp) : 0,
+        revenueM: monthly?.revenue ?? null,
+        gpM: monthly?.gp ?? null,
+        updatedAt: target ? target.updatedAt : null,
+        isPeriodLocked: period.isLocked,
+      };
+    });
+  }
+
+  // Çoklu çeyrek: kümülatif toplam hesaplanır
+  const sumsByVendor = new Map<string, { revenue: number; gp: number; latestUpdatedAt: Date | null }>();
+  for (const t of targets) {
+    const existing = sumsByVendor.get(t.vendorId) ?? { revenue: 0, gp: 0, latestUpdatedAt: null };
+    existing.revenue += Number(t.revenue);
+    existing.gp += Number(t.gp);
+    if (!existing.latestUpdatedAt || (t.updatedAt && t.updatedAt > existing.latestUpdatedAt)) {
+      existing.latestUpdatedAt = t.updatedAt;
+    }
+    sumsByVendor.set(t.vendorId, existing);
+  }
 
   return vendors.map((b) => {
-    const target = targetMap.get(b.id);
-    // Aylık alanlar `null` döner — çeyrek toplamındaki "yoksa 0" kuralı buraya
-    // KOPYALANMAMALI, yoksa "girilmemiş" ile "sıfır" ayırt edilemez.
-    const monthly = monthlyTriples(target);
+    const sum = sumsByVendor.get(b.id);
     return {
       vendorId: b.id,
       vendorName: b.name,
       managerId: b.managerId,
       managerName: b.manager?.name ?? null,
-      revenue: target ? Number(target.revenue) : 0,
-      gp: target ? Number(target.gp) : 0,
-      revenueM: monthly?.revenue ?? null,
-      gpM: monthly?.gp ?? null,
-      updatedAt: target ? target.updatedAt : null,
-      isPeriodLocked: period.isLocked,
+      revenue: sum ? sum.revenue : 0,
+      gp: sum ? sum.gp : 0,
+      revenueM: null,
+      gpM: null,
+      updatedAt: sum ? sum.latestUpdatedAt : null,
+      isPeriodLocked: anyPeriodLocked,
     };
   });
 }

@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuarterMultiSelect } from "@/components/ui/quarter-multi-select";
 import {
   Table,
   TableBody,
@@ -54,7 +55,7 @@ import { KPI_TILE_SHELL } from "@/components/viz/card-shell";
 import { TrendCard, TrendMeasure } from "@/components/viz/trend-chart";
 
 type ReportsData = Awaited<ReturnType<typeof getReportsData>>;
-type ReportBasis = "closing" | "forecast";
+type ReportBasis = "closing" | "forecast" | "hybrid";
 
 type ReportMetricSource = {
   targetRevenue: number;
@@ -70,6 +71,11 @@ type ReportMetricSource = {
   closingGpPercent: number;
   closingRevenueAchievement: number;
   closingGpAchievement: number;
+  blendedRevenue: number;
+  blendedGp: number;
+  blendedGpPercent: number;
+  blendedRevenueAchievement: number;
+  blendedGpAchievement: number;
 };
 
 interface ReportsClientProps {
@@ -91,31 +97,48 @@ function gpPercentOf(revenue: number, gp: number) {
 }
 
 function getBasisLabels(basis: ReportBasis) {
-  return basis === "closing"
-    ? {
-        name: "Kapanış bazlı",
-        gp: "Kapanış GP",
-        revenue: "Kapanış Revenue",
-        gpPercent: "Kapanış GP%",
-        compareTitle: "Target vs Kapanış",
-        achievement: "GP Achievement",
-        revenueAchievement: "Revenue Achievement",
-        performance: "Forecast GP Accuracy",
-        performanceDescription: "Forecast GP vs Kapanış GP",
-        detailsSuffix: "kapanış",
-      }
-    : {
-        name: "Forecast bazlı",
-        gp: "Forecast GP",
-        revenue: "Forecast Revenue",
-        gpPercent: "Forecast GP%",
-        compareTitle: "Target vs Forecast",
-        achievement: "Forecast GP Achievement",
-        revenueAchievement: "Forecast Revenue Achievement",
-        performance: "Forecast GP Achievement",
-        performanceDescription: "Forecast GP / Target GP",
-        detailsSuffix: "forecast",
-      };
+  if (basis === "closing") {
+    return {
+      name: "Kapanış bazlı",
+      gp: "Kapanış GP",
+      revenue: "Kapanış Revenue",
+      gpPercent: "Kapanış GP%",
+      compareTitle: "Target vs Kapanış",
+      achievement: "GP Achievement",
+      revenueAchievement: "Revenue Achievement",
+      performance: "Forecast GP Accuracy",
+      performanceDescription: "Forecast GP vs Kapanış GP",
+      detailsSuffix: "kapanış",
+    };
+  }
+
+  if (basis === "forecast") {
+    return {
+      name: "Forecast bazlı",
+      gp: "Forecast GP",
+      revenue: "Forecast Revenue",
+      gpPercent: "Forecast GP%",
+      compareTitle: "Target vs Forecast",
+      achievement: "Forecast GP Achievement",
+      revenueAchievement: "Forecast Revenue Achievement",
+      performance: "Forecast GP Achievement",
+      performanceDescription: "Forecast GP / Target GP",
+      detailsSuffix: "forecast",
+    };
+  }
+
+  return {
+    name: "Kapanış + Forecast",
+    gp: "Kapanış+Fc GP",
+    revenue: "Kapanış+Fc Revenue",
+    gpPercent: "Kapanış+Fc GP%",
+    compareTitle: "Target vs (Kapanış + Forecast)",
+    achievement: "GP Achievement",
+    revenueAchievement: "Revenue Achievement",
+    performance: "GP Achievement",
+    performanceDescription: "Harmanlanmış GP / Target GP",
+    detailsSuffix: "kapanış + forecast",
+  };
 }
 
 function getBasisValues(source: ReportMetricSource, basis: ReportBasis) {
@@ -127,6 +150,17 @@ function getBasisValues(source: ReportMetricSource, basis: ReportBasis) {
       revenueAchievement: source.forecastRevenueVsTarget,
       gpAchievement: source.forecastGpVsTarget,
       performance: source.forecastGpVsTarget,
+    };
+  }
+
+  if (basis === "hybrid") {
+    return {
+      revenue: source.blendedRevenue,
+      gp: source.blendedGp,
+      gpPercent: source.blendedGpPercent,
+      revenueAchievement: source.blendedRevenueAchievement,
+      gpAchievement: source.blendedGpAchievement,
+      performance: source.blendedGpAchievement,
     };
   }
 
@@ -142,6 +176,43 @@ function getBasisValues(source: ReportMetricSource, basis: ReportBasis) {
 
 function getBasisRisks(data: ReportsData, basis: ReportBasis) {
   if (basis === "closing") return data.risks;
+
+  if (basis === "hybrid") {
+    return data.managers
+      .flatMap((manager) =>
+        manager.vendors.flatMap((vendor) => {
+          const items = [];
+          if (vendor.blendedGp === 0 && vendor.blendedRevenue === 0) {
+            items.push({
+              type: "Eksik Veri",
+              severity: "high",
+              managerName: manager.managerName,
+              vendorName: vendor.vendorName,
+              detail: "Seçili dönem için ne kapanış ne de forecast verisi bulunuyor.",
+            });
+          }
+          if (vendor.targetGp > 0 && vendor.blendedGpAchievement < 75) {
+            items.push({
+              type: "Düşük GP Achievement",
+              severity: "high",
+              managerName: manager.managerName,
+              vendorName: vendor.vendorName,
+              detail: `Harmanlanmış GP achievement ${vendor.blendedGpAchievement.toFixed(1)}%.`,
+            });
+          }
+          if (vendor.blendedRevenue > 0 && vendor.blendedGpPercent < 10) {
+            items.push({
+              type: "Düşük GP%",
+              severity: "medium",
+              managerName: manager.managerName,
+              vendorName: vendor.vendorName,
+              detail: `Harmanlanmış GP% ${vendor.blendedGpPercent.toFixed(1)}%.`,
+            });
+          }
+          return items;
+        })
+      );
+  }
 
   return data.managers
     .flatMap((manager) =>
@@ -524,7 +595,7 @@ export default function ReportsClient({ initialData }: ReportsClientProps) {
   const [fiscalYear, setFiscalYear] = useState(initialData.fiscalYear);
   const [selectedQuarters, setSelectedQuarters] = useState<number[]>(initialData.quarters);
   const [data, setData] = useState(initialData);
-  const [reportBasis, setReportBasis] = useState<ReportBasis>("closing");
+  const [reportBasis, setReportBasis] = useState<ReportBasis>(initialData.isMixedPeriods ? "hybrid" : "closing");
   const [isLoading, setIsLoading] = useState(false);
   const [expandedManagers, setExpandedManagers] = useState<Record<string, boolean>>({});
   const [isPrinting, setIsPrinting] = useState(false);
@@ -640,6 +711,9 @@ export default function ReportsClient({ initialData }: ReportsClientProps) {
         const reportData = await getReportsData(nextFiscalYear, nextQuarters);
         setData(reportData);
         setExpandedManagers({});
+        if (reportData.isMixedPeriods) {
+          setReportBasis("hybrid");
+        }
       } catch (error: unknown) {
         toast.error(error instanceof Error ? error.message : "Rapor verileri alınırken hata oluştu.");
       } finally {
@@ -656,20 +730,6 @@ export default function ReportsClient({ initialData }: ReportsClientProps) {
     void refreshData(nextFiscalYear, selectedQuarters);
   };
 
-  const toggleQuarter = (quarter: number) => {
-    const exists = selectedQuarters.includes(quarter);
-    const nextQuarters = exists
-      ? selectedQuarters.filter((selectedQuarter) => selectedQuarter !== quarter)
-      : [...selectedQuarters, quarter].sort((a, b) => a - b);
-
-    if (nextQuarters.length === 0) {
-      toast.error("En az bir çeyrek seçili olmalı.");
-      return;
-    }
-
-    setSelectedQuarters(nextQuarters);
-    void refreshData(fiscalYear, nextQuarters);
-  };
 
   const toggleManager = (managerId: string) => {
     setExpandedManagers((current) => ({
@@ -712,20 +772,15 @@ export default function ReportsClient({ initialData }: ReportsClientProps) {
               ))}
             </SelectContent>
           </Select>
-          <div className="flex rounded-lg border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-900">
-            {[1, 2, 3, 4].map((quarter) => (
-              <Button
-                key={quarter}
-                type="button"
-                variant={selectedQuarters.includes(quarter) ? "default" : "ghost"}
-                size="sm"
-                className={selectedQuarters.includes(quarter) ? "bg-[#2E5A43] hover:bg-[#244936]" : ""}
-                onClick={() => toggleQuarter(quarter)}
-              >
-                Q{quarter}
-              </Button>
-            ))}
-          </div>
+          <QuarterMultiSelect
+            selectedQuarters={selectedQuarters}
+            onChange={(nextQuarters) => {
+              setSelectedQuarters(nextQuarters);
+              void refreshData(fiscalYear, nextQuarters);
+            }}
+            disabled={isLoading}
+            allowAllShortcut
+          />
           <div className="flex rounded-lg border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-900">
             <Button
               type="button"
@@ -744,6 +799,15 @@ export default function ReportsClient({ initialData }: ReportsClientProps) {
               onClick={() => setReportBasis("forecast")}
             >
               Forecast
+            </Button>
+            <Button
+              type="button"
+              variant={reportBasis === "hybrid" ? "default" : "ghost"}
+              size="sm"
+              className={reportBasis === "hybrid" ? "bg-[#2E5A43] hover:bg-[#244936]" : ""}
+              onClick={() => setReportBasis("hybrid")}
+            >
+              Kapanış + Forecast
             </Button>
           </div>
           <Button
@@ -766,6 +830,17 @@ export default function ReportsClient({ initialData }: ReportsClientProps) {
           </Button>
         </div>
       </div>
+
+      {data.isMixedPeriods && (
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/90 px-4 py-2.5 text-xs font-medium text-emerald-900 shadow-sm dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-300">
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[10px] font-bold text-white">
+            ✓
+          </span>
+          <span>
+            <strong>Harmanlanmış Mod:</strong> Seçilen çeyreklerde kapalı dönemler ({data.closedQuarters.map((q) => `Q${q}`).join(", ")}) için varsa <strong>kapanış</strong>, açık dönemler ({data.openQuarters.map((q) => `Q${q}`).join(", ")}) için <strong>forecast</strong> rakamları toplanarak sunulmaktadır.
+          </span>
+        </div>
+      )}
 
       {isLoading ? (
         <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm font-medium text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900">

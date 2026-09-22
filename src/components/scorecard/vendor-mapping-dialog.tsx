@@ -1,5 +1,4 @@
 "use client";
-
 import React, { useState } from "react";
 import {
   Dialog,
@@ -18,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertCircle, Building2, CheckCircle2, HelpCircle, Loader2 } from "lucide-react";
+import { AlertCircle, Building2, CheckCircle2,  Loader2 } from "lucide-react";
 
 export interface UnmatchedBrand {
   brandName: string;
@@ -63,7 +62,7 @@ export function VendorMappingDialog({
 
   const handleSave = () => {
     const mappings = Object.entries(selectedMappings)
-      .filter(([_, vendorId]) => vendorId && vendorId !== "SKIP")
+      .filter(([, vendorId]) => vendorId && vendorId !== "SKIP")
       .map(([excelBrand, targetVendorId]) => ({ excelBrand, targetVendorId }));
 
     onConfirmMappings(mappings, false);

@@ -9,7 +9,7 @@ function getPrismaAccessErrorMessage(error: unknown) {
   if (error && typeof error === "object" && "code" in error) {
     const code = String((error as { code?: unknown }).code);
 
-    if (code === "P1001") {
+    if (code === "P1001" || code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === "ENOTFOUND") {
       return "Veritabanına ulaşılamıyor. SSH tüneli veya veritabanı bağlantısını kontrol edin.";
     }
 

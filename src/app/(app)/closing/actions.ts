@@ -236,12 +236,22 @@ function makeImportKey(vendorId: string, fiscalPeriodId: string) {
   return `${vendorId}:${fiscalPeriodId}`;
 }
 
-export async function getClosings(fiscalYear: number, quarter: number) {
+export async function getClosings(fiscalYear: number, quarters: number[] | number) {
   const session = await auth();
   if (!session?.user) throw new Error("Oturum açık değil.");
 
+  const list = Array.isArray(quarters) ? quarters : [quarters];
+  const validQuarters = Array.from(
+    new Set(list.filter((q) => Number.isInteger(q) && q >= 1 && q <= 4))
+  ).sort((a, b) => a - b);
+  const selectedQuarters = validQuarters.length > 0 ? validQuarters : [1];
+
   const accessibleVendorIds = await getAccessibleVendorIds(session.user);
-  const period = await ensureFiscalPeriod(fiscalYear, quarter);
+  const periods = await Promise.all(
+    selectedQuarters.map((quarter) => ensureFiscalPeriod(fiscalYear, quarter))
+  );
+  const periodIds = periods.map((period) => period.id);
+  const anyPeriodLocked = periods.some((period) => period.isLocked);
 
   const [vendors, targets, forecasts, closings] = await Promise.all([
     prisma.vendor.findMany({
@@ -256,30 +266,102 @@ export async function getClosings(fiscalYear: number, quarter: number) {
       orderBy: { name: "asc" },
     }),
     prisma.target.findMany({
-      where: { vendorId: { in: accessibleVendorIds }, fiscalPeriodId: period.id },
+      where: { vendorId: { in: accessibleVendorIds }, fiscalPeriodId: { in: periodIds } },
     }),
     prisma.forecast.findMany({
-      where: { vendorId: { in: accessibleVendorIds }, fiscalPeriodId: period.id, isActive: true },
+      where: { vendorId: { in: accessibleVendorIds }, fiscalPeriodId: { in: periodIds }, isActive: true },
     }),
     prisma.closing.findMany({
-      where: { vendorId: { in: accessibleVendorIds }, fiscalPeriodId: period.id },
+      where: { vendorId: { in: accessibleVendorIds }, fiscalPeriodId: { in: periodIds } },
     }),
   ]);
 
-  const targetMap = new Map(targets.map((target) => [target.vendorId, target]));
-  const forecastMap = new Map(forecasts.map((forecast) => [forecast.vendorId, forecast]));
-  const closingMap = new Map(closings.map((closing) => [closing.vendorId, closing]));
+  if (selectedQuarters.length === 1) {
+    const period = periods[0];
+    const targetMap = new Map(targets.map((target) => [target.vendorId, target]));
+    const forecastMap = new Map(forecasts.map((forecast) => [forecast.vendorId, forecast]));
+    const closingMap = new Map(closings.map((closing) => [closing.vendorId, closing]));
+
+    return vendors.map((vendor) => {
+      const target = targetMap.get(vendor.id);
+      const forecast = forecastMap.get(vendor.id);
+      const closing = closingMap.get(vendor.id);
+      const targetRevenue = target ? Number(target.revenue) : 0;
+      const targetGp = target ? Number(target.gp) : 0;
+      const forecastRevenue = forecast ? Number(forecast.revenue) : 0;
+      const forecastGp = forecast ? Number(forecast.gp) : 0;
+      const closingRevenue = closing ? Number(closing.revenue) : 0;
+      const closingGp = closing ? Number(closing.gp) : 0;
+
+      return {
+        vendorId: vendor.id,
+        vendorName: vendor.name,
+        vendorCode: vendor.code,
+        managerId: vendor.managerId,
+        managerName: vendor.manager?.name ?? null,
+        targetRevenue,
+        targetGp,
+        targetGpPercent: calculateGpPercent(targetRevenue, targetGp),
+        forecastRevenue,
+        forecastGp,
+        forecastGpPercent: calculateGpPercent(forecastRevenue, forecastGp),
+        closingRevenue,
+        closingGp,
+        closingGpPercent: calculateGpPercent(closingRevenue, closingGp),
+        targetAchievement: calculateAchievement(closingRevenue, targetRevenue),
+        targetGpAchievement: calculateAchievement(closingGp, targetGp),
+        forecastAchievement: calculateAchievement(closingRevenue, forecastRevenue),
+        forecastGpAchievement: calculateAchievement(closingGp, forecastGp),
+        hasClosing: Boolean(closing),
+        closingRevenueM: monthlyTriples(closing)?.revenue ?? null,
+        closingGpM: monthlyTriples(closing)?.gp ?? null,
+        targetRevenueM: monthlyTriples(target)?.revenue ?? null,
+        targetGpM: monthlyTriples(target)?.gp ?? null,
+        updatedAt: closing?.updatedAt ?? null,
+        isPeriodLocked: period.isLocked,
+      };
+    });
+  }
+
+  // Çoklu çeyrek kümülatif toplamlar
+  const targetSums = new Map<string, { revenue: number; gp: number }>();
+  for (const t of targets) {
+    const s = targetSums.get(t.vendorId) ?? { revenue: 0, gp: 0 };
+    s.revenue += Number(t.revenue);
+    s.gp += Number(t.gp);
+    targetSums.set(t.vendorId, s);
+  }
+
+  const forecastSums = new Map<string, { revenue: number; gp: number }>();
+  for (const f of forecasts) {
+    const s = forecastSums.get(f.vendorId) ?? { revenue: 0, gp: 0 };
+    s.revenue += Number(f.revenue);
+    s.gp += Number(f.gp);
+    forecastSums.set(f.vendorId, s);
+  }
+
+  const closingSums = new Map<string, { revenue: number; gp: number; updatedAt: Date | null; count: number }>();
+  for (const c of closings) {
+    const s = closingSums.get(c.vendorId) ?? { revenue: 0, gp: 0, updatedAt: null, count: 0 };
+    s.revenue += Number(c.revenue);
+    s.gp += Number(c.gp);
+    s.count += 1;
+    if (!s.updatedAt || (c.updatedAt && c.updatedAt > s.updatedAt)) {
+      s.updatedAt = c.updatedAt;
+    }
+    closingSums.set(c.vendorId, s);
+  }
 
   return vendors.map((vendor) => {
-    const target = targetMap.get(vendor.id);
-    const forecast = forecastMap.get(vendor.id);
-    const closing = closingMap.get(vendor.id);
-    const targetRevenue = target ? Number(target.revenue) : 0;
-    const targetGp = target ? Number(target.gp) : 0;
-    const forecastRevenue = forecast ? Number(forecast.revenue) : 0;
-    const forecastGp = forecast ? Number(forecast.gp) : 0;
-    const closingRevenue = closing ? Number(closing.revenue) : 0;
-    const closingGp = closing ? Number(closing.gp) : 0;
+    const target = targetSums.get(vendor.id);
+    const forecast = forecastSums.get(vendor.id);
+    const closing = closingSums.get(vendor.id);
+    const targetRevenue = target ? target.revenue : 0;
+    const targetGp = target ? target.gp : 0;
+    const forecastRevenue = forecast ? forecast.revenue : 0;
+    const forecastGp = forecast ? forecast.gp : 0;
+    const closingRevenue = closing ? closing.revenue : 0;
+    const closingGp = closing ? closing.gp : 0;
 
     return {
       vendorId: vendor.id,
@@ -300,15 +382,13 @@ export async function getClosings(fiscalYear: number, quarter: number) {
       targetGpAchievement: calculateAchievement(closingGp, targetGp),
       forecastAchievement: calculateAchievement(closingRevenue, forecastRevenue),
       forecastGpAchievement: calculateAchievement(closingGp, forecastGp),
-      hasClosing: Boolean(closing),
-      // Aylık kırılım; null = girilmemiş. Çeyrek toplamındaki "yoksa 0" kuralı
-      // buraya UYGULANMAZ, yoksa "girilmemiş" ile "sıfır" ayırt edilemez.
-      closingRevenueM: monthlyTriples(closing)?.revenue ?? null,
-      closingGpM: monthlyTriples(closing)?.gp ?? null,
-      targetRevenueM: monthlyTriples(target)?.revenue ?? null,
-      targetGpM: monthlyTriples(target)?.gp ?? null,
+      hasClosing: Boolean(closing && closing.count > 0),
+      closingRevenueM: null,
+      closingGpM: null,
+      targetRevenueM: null,
+      targetGpM: null,
       updatedAt: closing?.updatedAt ?? null,
-      isPeriodLocked: period.isLocked,
+      isPeriodLocked: anyPeriodLocked,
     };
   });
 }

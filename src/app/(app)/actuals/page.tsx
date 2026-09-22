@@ -30,6 +30,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuarterMultiSelect } from "@/components/ui/quarter-multi-select";
 import {
   Loader2,
   Calendar,
@@ -87,7 +88,7 @@ export default function ActualsPage() {
   const currentContext = getCurrentFiscalContext();
 
   const [fiscalYear, setFiscalYear] = useState<number>(currentContext.fiscalYear);
-  const [quarter, setQuarter] = useState<number>(currentContext.quarter);
+  const [selectedQuarters, setSelectedQuarters] = useState<number[]>([currentContext.quarter]);
   // Default week clamped strictly to [1, 13]
   const defaultWeek = Math.max(1, Math.min(13, currentContext.weekInQuarter));
   const [weekNumber, setWeekNumber] = useState<number>(defaultWeek);
@@ -135,7 +136,7 @@ export default function ActualsPage() {
   const loadActuals = useCallback(async () => {
     setIsLoading(true);
     try {
-      const res = await getActuals(fiscalYear, quarter, weekNumber);
+      const res = await getActuals(fiscalYear, selectedQuarters, weekNumber);
       setActuals(res.rows);
       setLatestUploadWeekNumber(res.latestUploadWeekNumber);
     } catch (err: unknown) {
@@ -143,7 +144,9 @@ export default function ActualsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [fiscalYear, quarter, weekNumber]);
+  }, [fiscalYear, selectedQuarters, weekNumber]);
+
+  const quarter = selectedQuarters[0] ?? currentContext.quarter;
 
   useEffect(() => {
     const loadTask = Promise.resolve().then(loadActuals);
@@ -443,22 +446,12 @@ export default function ActualsPage() {
           <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-700" />
 
           <div className="flex items-center gap-1.5">
-            <span className="text-xs font-semibold text-slate-500 font-sans">Çeyrek:</span>
-            <Select
-              value={quarter.toString()}
-              onValueChange={(val) => { if (val) setQuarter(parseInt(val)); }}
-            >
-              <SelectTrigger className="h-8 w-20 border-slate-200 text-xs font-medium focus:outline-none">
-                <SelectValue placeholder="Çeyrek" />
-              </SelectTrigger>
-              <SelectContent className="bg-white border-slate-200">
-                {[1, 2, 3, 4].map((q) => (
-                  <SelectItem key={q} value={q.toString()} className="text-xs font-sans">
-                    Q{q}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <QuarterMultiSelect
+              selectedQuarters={selectedQuarters}
+              onChange={setSelectedQuarters}
+              disabled={isLoading}
+              allowAllShortcut
+            />
           </div>
 
           <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-700" />

@@ -75,7 +75,7 @@ export interface WeeklyHygieneTrendItem {
 
 export async function getCrmAnalyticsDataAction(
   fiscalYear: number,
-  quarter: number,
+  quarters: number[] | number,
   weekNumber: number
 ) {
   const session = await auth();
@@ -83,7 +83,17 @@ export async function getCrmAnalyticsDataAction(
     throw new Error("Oturum açık değil.");
   }
 
-  const period = await ensureFiscalPeriod(fiscalYear, quarter);
+  const list = Array.isArray(quarters) ? quarters : [quarters];
+  const validQuarters = Array.from(
+    new Set(list.filter((q) => Number.isInteger(q) && q >= 1 && q <= 4))
+  ).sort((a, b) => a - b);
+  const selectedQuarters = validQuarters.length > 0 ? validQuarters : [1];
+
+  const periods = await Promise.all(
+    selectedQuarters.map((quarter) => ensureFiscalPeriod(fiscalYear, quarter))
+  );
+  const periodIds = periods.map((period) => period.id);
+
   const isDirector = session.user.role === "DIREKTOR";
   const accessibleVendorIds = await getAccessibleVendorIds(session.user);
   const accessibleVendors = isDirector
@@ -102,7 +112,7 @@ export async function getCrmAnalyticsDataAction(
   // 1. Fetch Sales Manager scorecards
   const managerScorecards = await prisma.salesManagerScorecard.findMany({
     where: {
-      fiscalPeriodId: period.id,
+      fiscalPeriodId: { in: periodIds },
       weekNumber,
       ...(isDirector ? {} : { userId: session.user.id }),
     },
@@ -114,7 +124,7 @@ export async function getCrmAnalyticsDataAction(
   // 2. Fetch Vendor scorecards for the week
   const vendorScorecards = await prisma.vendorScorecard.findMany({
     where: {
-      fiscalPeriodId: period.id,
+      fiscalPeriodId: { in: periodIds },
       weekNumber,
       ...(vendorScope ?? {}),
     },
@@ -137,7 +147,7 @@ export async function getCrmAnalyticsDataAction(
         parsed.forEach((d) => {
           allDealsMap.set(d.code, { ...d, salesManager: d.salesManager || m.managerName });
         });
-      } catch (e) {}
+      } catch {}
     }
   });
 
@@ -151,7 +161,7 @@ export async function getCrmAnalyticsDataAction(
             allDealsMap.set(d.code, { ...d, salesManager: d.salesManager || vSmName });
           }
         });
-      } catch (e) {}
+      } catch {}
     }
   });
 
@@ -304,7 +314,7 @@ export async function getCrmAnalyticsDataAction(
   // 5. Weekly CRM Hygiene Trend (Weeks 1 to 13)
   const allWeeksVendors = await prisma.vendorScorecard.findMany({
     where: {
-      fiscalPeriodId: period.id,
+      fiscalPeriodId: { in: periodIds },
       ...(vendorScope ?? {}),
     },
     select: { weekNumber: true, crmHealthScore: true, overdueCount: true, totalDeals: true },

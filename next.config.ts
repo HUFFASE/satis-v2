@@ -4,7 +4,7 @@ const nextConfig: NextConfig = {
   devIndicators: false,
   experimental: {
     serverActions: {
-      bodySizeLimit: "15mb",
+      bodySizeLimit: "40mb",
     },
   },
   images: {

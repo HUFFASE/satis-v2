@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuarterMultiSelect } from "@/components/ui/quarter-multi-select";
 import {
   Table,
   TableBody,
@@ -120,7 +121,7 @@ function escapeExcelCell(value: string) {
 export default function ClosingPage() {
   const currentContext = getCurrentFiscalContext();
   const [fiscalYear, setFiscalYear] = useState(currentContext.fiscalYear);
-  const [quarter, setQuarter] = useState(currentContext.quarter);
+  const [selectedQuarters, setSelectedQuarters] = useState<number[]>([currentContext.quarter]);
   const [rows, setRows] = useState<ClosingRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedManagers, setExpandedManagers] = useState<Record<string, boolean>>({});
@@ -202,14 +203,16 @@ export default function ClosingPage() {
   const loadClosings = useCallback(async () => {
     setIsLoading(true);
     try {
-      const data = await getClosings(fiscalYear, quarter);
+      const data = await getClosings(fiscalYear, selectedQuarters);
       setRows(data);
     } catch (err: unknown) {
       toast.error(getErrorMessage(err, "Kapanış verileri yüklenirken hata oluştu."));
     } finally {
       setIsLoading(false);
     }
-  }, [fiscalYear, quarter]);
+  }, [fiscalYear, selectedQuarters]);
+
+  const quarter = selectedQuarters[0] ?? currentContext.quarter;
 
   useEffect(() => {
     void Promise.resolve().then(loadClosings);
@@ -412,20 +415,14 @@ export default function ClosingPage() {
               ))}
             </SelectContent>
           </Select>
-          <Select value={quarter.toString()} onValueChange={(value) => setQuarter(Number(value))}>
-            <SelectTrigger className="h-8 w-20 border-slate-200 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="bg-white border-slate-200">
-              {[1, 2, 3, 4].map((q) => (
-                <SelectItem key={q} value={q.toString()} className="text-xs">
-                  Q{q}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <QuarterMultiSelect
+            selectedQuarters={selectedQuarters}
+            onChange={setSelectedQuarters}
+            disabled={isLoading}
+            allowAllShortcut
+          />
           <Badge className="bg-emerald-800 text-emerald-50 hover:bg-emerald-800">
-            FY{fiscalYear} Q{quarter}
+            FY{fiscalYear} - {selectedQuarters.map((q) => `Q${q}`).join(", ")}
           </Badge>
         </div>
       </div>

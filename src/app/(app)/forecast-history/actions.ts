@@ -25,14 +25,23 @@ function normalizeNumbers(values: number[] | undefined, fallback: number[]) {
   return normalized.length > 0 ? normalized : fallback;
 }
 
-export async function getForecastHistoryData(fiscalYear: number, quarter: number) {
+export async function getForecastHistoryData(fiscalYear: number, quarters: number[] | number) {
   const session = await auth();
   if (!session?.user) {
     throw new Error("Oturum açık değil.");
   }
 
+  const list = Array.isArray(quarters) ? quarters : [quarters];
+  const validQuarters = Array.from(
+    new Set(list.filter((q) => Number.isInteger(q) && q >= 1 && q <= 4))
+  ).sort((a, b) => a - b);
+  const selectedQuarters = validQuarters.length > 0 ? validQuarters : [1];
+
   const accessibleVendorIds = await getAccessibleVendorIds(session.user);
-  const period = await ensureFiscalPeriod(fiscalYear, quarter);
+  const periods = await Promise.all(
+    selectedQuarters.map((quarter) => ensureFiscalPeriod(fiscalYear, quarter))
+  );
+  const periodIds = periods.map((period) => period.id);
 
   const [vendors, forecasts, targets] = await Promise.all([
     prisma.vendor.findMany({
@@ -55,11 +64,12 @@ export async function getForecastHistoryData(fiscalYear: number, quarter: number
     prisma.forecast.findMany({
       where: {
         vendorId: { in: accessibleVendorIds },
-        fiscalPeriodId: period.id,
+        fiscalPeriodId: { in: periodIds },
       },
       select: {
         id: true,
         vendorId: true,
+        fiscalPeriodId: true,
         weekNumber: true,
         revenue: true,
         gp: true,
@@ -79,10 +89,11 @@ export async function getForecastHistoryData(fiscalYear: number, quarter: number
     prisma.target.findMany({
       where: {
         vendorId: { in: accessibleVendorIds },
-        fiscalPeriodId: period.id,
+        fiscalPeriodId: { in: periodIds },
       },
       select: {
         vendorId: true,
+        fiscalPeriodId: true,
         revenue: true,
         gp: true,
       },
@@ -324,7 +335,8 @@ export async function getForecastHistoryData(fiscalYear: number, quarter: number
 
   return {
     fiscalYear,
-    quarter,
+    selectedQuarters,
+    quarter: selectedQuarters[0] ?? 1,
     totals: {
       forecastCount: forecastRows.length,
       archivedCount: forecastRows.filter((row) => !row.isActive).length,
@@ -383,8 +395,8 @@ export async function getForecastTrendData(params: {
     .filter((vendor) => managerIds.size === 0 || (vendor.managerId && managerIds.has(vendor.managerId)))
     .filter((vendor) => vendorIds.size === 0 || vendorIds.has(vendor.id))
     .map((vendor) => vendor.id);
-  const periodIds = periods.map((period) => period.id);
   const periodById = new Map(periods.map((period) => [period.id, period]));
+  const periodIds = periods.map((period) => period.id);
 
   const forecasts = await prisma.forecast.findMany({
     where: {

@@ -3,6 +3,7 @@
 import { auth } from "@/auth";
 import prisma from "@/lib/prisma";
 import { getAccessibleVendorIds } from "@/lib/scope";
+import { getFiscalContext, hasMixedFiscalPeriods, isFiscalPeriodClosed } from "@/lib/fiscal";
 import { ensureFiscalPeriod } from "@/lib/fiscal-db";
 
 export type ManagerProfileCard = {
@@ -52,7 +53,7 @@ function percent(numerator: number, denominator: number) {
  */
 export async function getManagerProfileCards(
   fiscalYear: number,
-  quarter: number,
+  quarters: number[] | number,
   weekNumber: number
 ): Promise<ManagerProfileCard[]> {
   const session = await auth();
@@ -60,10 +61,21 @@ export async function getManagerProfileCards(
     throw new Error("Oturum açık değil.");
   }
 
-  const accessibleVendorIds = await getAccessibleVendorIds(session.user);
-  const period = await ensureFiscalPeriod(fiscalYear, quarter);
+  const list = Array.isArray(quarters) ? quarters : [quarters];
+  const validQuarters = Array.from(
+    new Set(list.filter((q) => Number.isInteger(q) && q >= 1 && q <= 4))
+  ).sort((a, b) => a - b);
+  const selectedQuarters = validQuarters.length > 0 ? validQuarters : [1];
 
-  const [vendors, forecasts, targets, scorecards] = await Promise.all([
+  const currentContext = getFiscalContext(new Date());
+  const accessibleVendorIds = await getAccessibleVendorIds(session.user);
+  const periods = await Promise.all(
+    selectedQuarters.map((quarter) => ensureFiscalPeriod(fiscalYear, quarter))
+  );
+  const periodIds = periods.map((period) => period.id);
+  const isMixedPeriods = hasMixedFiscalPeriods(periods, currentContext);
+
+  const [vendors, forecasts, targets, scorecards, closings] = await Promise.all([
     prisma.vendor.findMany({
       where: { id: { in: accessibleVendorIds }, isActive: true },
       select: {
@@ -73,15 +85,15 @@ export async function getManagerProfileCards(
       },
     }),
     prisma.forecast.findMany({
-      where: { vendorId: { in: accessibleVendorIds }, fiscalPeriodId: period.id, isActive: true },
-      select: { vendorId: true, revenue: true, gp: true },
+      where: { vendorId: { in: accessibleVendorIds }, fiscalPeriodId: { in: periodIds }, isActive: true },
+      select: { vendorId: true, fiscalPeriodId: true, revenue: true, gp: true },
     }),
     prisma.target.findMany({
-      where: { vendorId: { in: accessibleVendorIds }, fiscalPeriodId: period.id },
-      select: { vendorId: true, revenue: true, gp: true },
+      where: { vendorId: { in: accessibleVendorIds }, fiscalPeriodId: { in: periodIds } },
+      select: { vendorId: true, fiscalPeriodId: true, revenue: true, gp: true },
     }),
     prisma.salesManagerScorecard.findMany({
-      where: { fiscalPeriodId: period.id, weekNumber, user: { role: "SATIS_MUDURU" } },
+      where: { fiscalPeriodId: { in: periodIds }, weekNumber, user: { role: "SATIS_MUDURU" } },
       select: {
         userId: true,
         crmHealthScore: true,
@@ -90,10 +102,16 @@ export async function getManagerProfileCards(
         managerComment: true,
       },
     }),
+    prisma.closing.findMany({
+      where: { vendorId: { in: accessibleVendorIds }, fiscalPeriodId: { in: periodIds } },
+      select: { vendorId: true, fiscalPeriodId: true, revenue: true, gp: true },
+    }),
   ]);
 
-  const forecastByVendor = new Map(forecasts.map((row) => [row.vendorId, row]));
-  const targetByVendor = new Map(targets.map((row) => [row.vendorId, row]));
+  const metricKey = (vendorId: string, fiscalPeriodId: string) => `${vendorId}:${fiscalPeriodId}`;
+  const forecastByVendorPeriod = new Map(forecasts.map((row) => [metricKey(row.vendorId, row.fiscalPeriodId), row]));
+  const targetByVendorPeriod = new Map(targets.map((row) => [metricKey(row.vendorId, row.fiscalPeriodId), row]));
+  const closingByVendorPeriod = new Map(closings.map((row) => [metricKey(row.vendorId, row.fiscalPeriodId), row]));
   const scorecardByUser = new Map(
     scorecards.filter((row) => row.userId).map((row) => [row.userId as string, row])
   );
@@ -131,18 +149,54 @@ export async function getManagerProfileCards(
         forecastedVendorCount: 0,
       };
 
-    const forecast = forecastByVendor.get(vendor.id);
-    const target = targetByVendor.get(vendor.id);
-
     entry.vendorCount += 1;
-    if (forecast) {
-      entry.forecastedVendorCount += 1;
-      entry.forecastRevenue += Number(forecast.revenue);
-      entry.forecastGp += Number(forecast.gp);
+    let vendorHasData = false;
+
+    for (const period of periods) {
+      const key = metricKey(vendor.id, period.id);
+      const isClosed = isFiscalPeriodClosed(period, currentContext);
+      const target = targetByVendorPeriod.get(key);
+
+      if (target) {
+        entry.targetRevenue += Number(target.revenue);
+        entry.targetGp += Number(target.gp);
+      }
+
+      if (isMixedPeriods) {
+        if (isClosed) {
+          const closing = closingByVendorPeriod.get(key);
+          if (closing && (closing.revenue !== null || closing.gp !== null)) {
+            entry.forecastRevenue += Number(closing.revenue ?? 0);
+            entry.forecastGp += Number(closing.gp ?? 0);
+            vendorHasData = true;
+          } else {
+            const forecast = forecastByVendorPeriod.get(key);
+            if (forecast) {
+              entry.forecastRevenue += Number(forecast.revenue);
+              entry.forecastGp += Number(forecast.gp);
+              vendorHasData = true;
+            }
+          }
+        } else {
+          const forecast = forecastByVendorPeriod.get(key);
+          if (forecast) {
+            entry.forecastRevenue += Number(forecast.revenue);
+            entry.forecastGp += Number(forecast.gp);
+            vendorHasData = true;
+          }
+        }
+      } else {
+        const forecast = forecastByVendorPeriod.get(key);
+        if (forecast) {
+          entry.forecastRevenue += Number(forecast.revenue);
+          entry.forecastGp += Number(forecast.gp);
+          vendorHasData = true;
+        }
+      }
     }
-    if (target) {
-      entry.targetRevenue += Number(target.revenue);
-      entry.targetGp += Number(target.gp);
+
+    if (vendorHasData) {
+      entry.forecastedVendorCount += 1;
     }
 
     grouped.set(vendor.managerId, entry);

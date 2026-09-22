@@ -5,11 +5,11 @@ import { Prisma } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { ensureFiscalPeriod } from "@/lib/fiscal-db";
 import { getAccessibleVendorIds, assertVendorAccess } from "@/lib/scope";
-import { getFiscalContext } from "@/lib/fiscal";
+import { getFiscalContext, hasMixedFiscalPeriods, isFiscalPeriodClosed } from "@/lib/fiscal";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import * as XLSX from "xlsx";
-import { parseTDSynnexCrmExcel } from "@/lib/crm/tdsynnex-parser";
+import { parseTDSynnexCrmExcel, type CrmAuditDeal } from "@/lib/crm/tdsynnex-parser";
 import { MAX_CRM_FILE_SIZE_BYTES } from "@/lib/upload-limits";
 import {
   assertCurrentFiscalPeriod,
@@ -180,21 +180,37 @@ async function getAccessibleVendorLookup(user: { id: string; role: string }) {
   };
 }
 
-export async function getActiveForecasts(fiscalYear: number, quarter: number, selectedWeekNumber?: number) {
+export async function getActiveForecasts(fiscalYear: number, quarters: number[] | number, selectedWeekNumber?: number) {
   const session = await auth();
   if (!session?.user) {
     throw new Error("Oturum açık değil.");
   }
 
+  const list = Array.isArray(quarters) ? quarters : [quarters];
+  const validQuarters = Array.from(
+    new Set(list.filter((q) => Number.isInteger(q) && q >= 1 && q <= 4))
+  ).sort((a, b) => a - b);
+  const selectedQuarters = validQuarters.length > 0 ? validQuarters : [1];
+
   const currentContext = getFiscalContext(new Date());
-  const isCurrentFiscalPeriod = currentContext.fiscalYear === fiscalYear && currentContext.quarter === quarter;
-  const targetWeek = selectedWeekNumber && selectedWeekNumber >= 1 && selectedWeekNumber <= 13
-    ? selectedWeekNumber
-    : (isCurrentFiscalPeriod ? currentContext.weekInQuarter : undefined);
+  const isCurrentFiscalPeriod =
+    selectedQuarters.length === 1 &&
+    currentContext.fiscalYear === fiscalYear &&
+    currentContext.quarter === selectedQuarters[0];
+  const targetWeek =
+    selectedWeekNumber && selectedWeekNumber >= 1 && selectedWeekNumber <= 13
+      ? selectedWeekNumber
+      : isCurrentFiscalPeriod
+        ? currentContext.weekInQuarter
+        : undefined;
 
   const activeBacklogWeekNumber = targetWeek ?? currentContext.weekInQuarter;
   const accessibleVendorIds = await getAccessibleVendorIds(session.user);
-  const period = await ensureFiscalPeriod(fiscalYear, quarter);
+  const periods = await Promise.all(
+    selectedQuarters.map((quarter) => ensureFiscalPeriod(fiscalYear, quarter))
+  );
+  const periodIds = periods.map((period) => period.id);
+  const anyPeriodLocked = periods.some((period) => period.isLocked);
 
   const vendors = await prisma.vendor.findMany({
     where: {
@@ -214,51 +230,189 @@ export async function getActiveForecasts(fiscalYear: number, quarter: number, se
     orderBy: { name: "asc" },
   });
 
-  const forecasts = await prisma.forecast.findMany({
-    where: {
-      vendorId: { in: accessibleVendorIds },
-      fiscalPeriodId: period.id,
-      ...(targetWeek ? { weekNumber: targetWeek } : { isActive: true }),
-    },
-  });
-  const forecastMap = new Map(forecasts.map((forecast) => [forecast.vendorId, forecast]));
+  const isMixedPeriods = hasMixedFiscalPeriods(periods, currentContext);
+  const closedQuarters = periods.filter((p) => isFiscalPeriodClosed(p, currentContext)).map((p) => p.quarter);
+  const openQuarters = periods.filter((p) => !isFiscalPeriodClosed(p, currentContext)).map((p) => p.quarter);
 
-  const [targets, actuals] = await Promise.all([
+  const [forecasts, targets, actuals, latestForecast, closings] = await Promise.all([
+    prisma.forecast.findMany({
+      where: {
+        vendorId: { in: accessibleVendorIds },
+        fiscalPeriodId: { in: periodIds },
+        ...(targetWeek ? { weekNumber: targetWeek } : { isActive: true }),
+      },
+    }),
     prisma.target.findMany({
       where: {
         vendorId: { in: accessibleVendorIds },
-        fiscalPeriodId: period.id,
+        fiscalPeriodId: { in: periodIds },
       },
     }),
     prisma.actual.findMany({
       where: {
         vendorId: { in: accessibleVendorIds },
-        fiscalPeriodId: period.id,
+        fiscalPeriodId: { in: periodIds },
         weekNumber: activeBacklogWeekNumber,
       },
     }),
+    prisma.forecast.findFirst({
+      where: {
+        vendorId: { in: accessibleVendorIds },
+        fiscalPeriodId: { in: periodIds },
+      },
+      orderBy: { updatedAt: "desc" },
+      select: { weekNumber: true, updatedAt: true },
+    }),
+    prisma.closing.findMany({
+      where: {
+        vendorId: { in: accessibleVendorIds },
+        fiscalPeriodId: { in: periodIds },
+      },
+    }),
   ]);
-  const targetMap = new Map(targets.map((target) => [target.vendorId, target]));
-  const actualMap = new Map(actuals.map((actual) => [actual.vendorId, actual]));
 
-  const latestForecast = await prisma.forecast.findFirst({
-    where: {
-      vendorId: { in: accessibleVendorIds },
-      fiscalPeriodId: period.id,
-    },
-    orderBy: { updatedAt: "desc" },
-    select: { weekNumber: true, updatedAt: true },
-  });
+  if (selectedQuarters.length === 1) {
+    const period = periods[0];
+    const forecastMap = new Map(forecasts.map((forecast) => [forecast.vendorId, forecast]));
+    const targetMap = new Map(targets.map((target) => [target.vendorId, target]));
+    const actualMap = new Map(actuals.map((actual) => [actual.vendorId, actual]));
+
+    const rows = vendors.map((vendor) => {
+      const forecast = forecastMap.get(vendor.id);
+      const target = targetMap.get(vendor.id);
+      const actual = actualMap.get(vendor.id);
+      const forecastRevenue = forecast ? Number(forecast.revenue) : 0;
+      const forecastGp = forecast ? Number(forecast.gp) : 0;
+      const targetRevenue = target ? Number(target.revenue) : 0;
+      const targetGp = target ? Number(target.gp) : 0;
+      const backlogRevenue = actual ? Number(actual.backlog) : 0;
+
+      return {
+        vendorId: vendor.id,
+        vendorName: vendor.name,
+        managerId: vendor.managerId,
+        managerName: vendor.manager?.name ?? null,
+        targetRevenue,
+        targetGp,
+        targetGpPercent: calculateGpPercent(targetRevenue, targetGp),
+        revenue: forecastRevenue,
+        gp: forecastGp,
+        gpPercent: calculateGpPercent(forecastRevenue, forecastGp),
+        revenueAchievement: targetRevenue > 0 ? (forecastRevenue / targetRevenue) * 100 : 0,
+        gpAchievement: targetGp > 0 ? (forecastGp / targetGp) * 100 : 0,
+        weekNumber: forecast?.weekNumber ?? targetWeek ?? null,
+        submittedAt: forecast?.updatedAt ?? null,
+        note: forecast?.note ?? null,
+        hasForecast: Boolean(forecast),
+        hasTarget: Boolean(target),
+        backlogRevenue,
+        backlogWeekNumber: activeBacklogWeekNumber,
+        hasBacklog: Boolean(actual),
+        isBelowBacklog: Boolean(forecast && actual && forecastRevenue < backlogRevenue),
+        isPeriodLocked: period.isLocked,
+      };
+    });
+
+    return {
+      rows,
+      latestUploadWeekNumber: latestForecast?.weekNumber ?? null,
+      latestUploadAt: latestForecast?.updatedAt ?? null,
+    };
+  }
+
+  // Çoklu çeyrek toplamları
+  const metricKey = (vendorId: string, fiscalPeriodId: string) => `${vendorId}:${fiscalPeriodId}`;
+  const forecastByVendorPeriod = new Map(forecasts.map((f) => [metricKey(f.vendorId, f.fiscalPeriodId), f]));
+  const closingByVendorPeriod = new Map(closings.map((c) => [metricKey(c.vendorId, c.fiscalPeriodId), c]));
+
+  const forecastSums = new Map<string, { revenue: number; gp: number; count: number; submittedAt: Date | null; note: string | null }>();
+
+  for (const vendor of vendors) {
+    const s = { revenue: 0, gp: 0, count: 0, submittedAt: null as Date | null, note: null as string | null };
+
+    for (const period of periods) {
+      const key = metricKey(vendor.id, period.id);
+      const isClosed = isFiscalPeriodClosed(period, currentContext);
+
+      if (isMixedPeriods) {
+        if (isClosed) {
+          const closing = closingByVendorPeriod.get(key);
+          if (closing && (closing.revenue !== null || closing.gp !== null)) {
+            s.revenue += Number(closing.revenue ?? 0);
+            s.gp += Number(closing.gp ?? 0);
+            s.count += 1;
+          } else {
+            const forecast = forecastByVendorPeriod.get(key);
+            if (forecast) {
+              s.revenue += Number(forecast.revenue);
+              s.gp += Number(forecast.gp);
+              s.count += 1;
+              if (!s.submittedAt || forecast.updatedAt > s.submittedAt) {
+                s.submittedAt = forecast.updatedAt;
+                s.note = forecast.note;
+              }
+            }
+          }
+        } else {
+          const forecast = forecastByVendorPeriod.get(key);
+          if (forecast) {
+            s.revenue += Number(forecast.revenue);
+            s.gp += Number(forecast.gp);
+            s.count += 1;
+            if (!s.submittedAt || forecast.updatedAt > s.submittedAt) {
+              s.submittedAt = forecast.updatedAt;
+              s.note = forecast.note;
+            }
+          }
+        }
+      } else {
+        const forecast = forecastByVendorPeriod.get(key);
+        if (forecast) {
+          s.revenue += Number(forecast.revenue);
+          s.gp += Number(forecast.gp);
+          s.count += 1;
+          if (!s.submittedAt || forecast.updatedAt > s.submittedAt) {
+            s.submittedAt = forecast.updatedAt;
+            s.note = forecast.note;
+          }
+        }
+      }
+    }
+
+    forecastSums.set(vendor.id, s);
+  }
+
+  const targetSums = new Map<string, { revenue: number; gp: number; count: number }>();
+  for (const t of targets) {
+    const s = targetSums.get(t.vendorId) ?? { revenue: 0, gp: 0, count: 0 };
+    s.revenue += Number(t.revenue);
+    s.gp += Number(t.gp);
+    s.count += 1;
+    targetSums.set(t.vendorId, s);
+  }
+
+  const backlogSums = new Map<string, { revenue: number; count: number }>();
+  const closedPeriodIdSet = new Set(periods.filter((p) => isFiscalPeriodClosed(p, currentContext)).map((p) => p.id));
+  for (const a of actuals) {
+    if (closedPeriodIdSet.has(a.fiscalPeriodId)) {
+      // Kapanmış çeyreklerin backlog'u satışa döndüğü için bekleyen backlog olarak eklenmez
+      continue;
+    }
+    const s = backlogSums.get(a.vendorId) ?? { revenue: 0, count: 0 };
+    s.revenue += Number(a.backlog);
+    s.count += 1;
+    backlogSums.set(a.vendorId, s);
+  }
 
   const rows = vendors.map((vendor) => {
-    const forecast = forecastMap.get(vendor.id);
-    const target = targetMap.get(vendor.id);
-    const actual = actualMap.get(vendor.id);
-    const forecastRevenue = forecast ? Number(forecast.revenue) : 0;
-    const forecastGp = forecast ? Number(forecast.gp) : 0;
-    const targetRevenue = target ? Number(target.revenue) : 0;
-    const targetGp = target ? Number(target.gp) : 0;
-    const backlogRevenue = actual ? Number(actual.backlog) : 0;
+    const forecast = forecastSums.get(vendor.id);
+    const target = targetSums.get(vendor.id);
+    const actual = backlogSums.get(vendor.id);
+    const forecastRevenue = forecast ? forecast.revenue : 0;
+    const forecastGp = forecast ? forecast.gp : 0;
+    const targetRevenue = target ? target.revenue : 0;
+    const targetGp = target ? target.gp : 0;
+    const backlogRevenue = actual ? actual.revenue : 0;
 
     return {
       vendorId: vendor.id,
@@ -273,16 +427,16 @@ export async function getActiveForecasts(fiscalYear: number, quarter: number, se
       gpPercent: calculateGpPercent(forecastRevenue, forecastGp),
       revenueAchievement: targetRevenue > 0 ? (forecastRevenue / targetRevenue) * 100 : 0,
       gpAchievement: targetGp > 0 ? (forecastGp / targetGp) * 100 : 0,
-      weekNumber: forecast?.weekNumber ?? targetWeek ?? null,
-      submittedAt: forecast?.updatedAt ?? null,
+      weekNumber: targetWeek ?? null,
+      submittedAt: forecast?.submittedAt ?? null,
       note: forecast?.note ?? null,
-      hasForecast: Boolean(forecast),
-      hasTarget: Boolean(target),
+      hasForecast: Boolean(forecast && forecast.count > 0),
+      hasTarget: Boolean(target && target.count > 0),
       backlogRevenue,
       backlogWeekNumber: activeBacklogWeekNumber,
-      hasBacklog: Boolean(actual),
+      hasBacklog: Boolean(actual && actual.count > 0),
       isBelowBacklog: Boolean(forecast && actual && forecastRevenue < backlogRevenue),
-      isPeriodLocked: period.isLocked,
+      isPeriodLocked: anyPeriodLocked,
     };
   });
 
@@ -290,6 +444,9 @@ export async function getActiveForecasts(fiscalYear: number, quarter: number, se
     rows,
     latestUploadWeekNumber: latestForecast?.weekNumber ?? null,
     latestUploadAt: latestForecast?.updatedAt ?? null,
+    isMixedPeriods,
+    closedQuarters,
+    openQuarters,
   };
 }
 
@@ -830,18 +987,27 @@ export async function getSessionUser() {
   };
 }
 
-export async function getWeeklyForecastTrend(fiscalYear: number, quarter: number) {
+export async function getWeeklyForecastTrend(fiscalYear: number, quarters: number[] | number) {
   const session = await auth();
   if (!session?.user) {
     throw new Error("Oturum açık değil.");
   }
 
+  const list = Array.isArray(quarters) ? quarters : [quarters];
+  const validQuarters = Array.from(
+    new Set(list.filter((q) => Number.isInteger(q) && q >= 1 && q <= 4))
+  ).sort((a, b) => a - b);
+  const selectedQuarters = validQuarters.length > 0 ? validQuarters : [1];
+
   const accessibleVendorIds = await getAccessibleVendorIds(session.user);
-  const period = await ensureFiscalPeriod(fiscalYear, quarter);
+  const periods = await Promise.all(
+    selectedQuarters.map((quarter) => ensureFiscalPeriod(fiscalYear, quarter))
+  );
+  const periodIds = periods.map((period) => period.id);
 
   const forecasts = await prisma.forecast.findMany({
     where: {
-      fiscalPeriodId: period.id,
+      fiscalPeriodId: { in: periodIds },
       vendorId: { in: accessibleVendorIds },
     },
     select: {
@@ -935,7 +1101,7 @@ export async function uploadCrmExcelAction(
     const brandSummaries = Object.values(parsed.brandSummaries);
 
     // 1. Fetch DB Vendors with their assigned Sales Managers (User with role SATIS_MUDURU) and Aliases
-    let dbVendors = await prisma.vendor.findMany({
+    const dbVendors = await prisma.vendor.findMany({
       include: {
         manager: { select: { id: true, name: true, role: true } },
         aliases: { select: { alias: true } },
@@ -993,7 +1159,7 @@ export async function uploadCrmExcelAction(
         tryRawPipeline: number;
         tryDealCount: number;
         overdueCount: number;
-        auditDeals: any[];
+        auditDeals: CrmAuditDeal[];
       }
     > = {};
 
@@ -1013,7 +1179,7 @@ export async function uploadCrmExcelAction(
         tryRawPipeline: 0,
         tryDealCount: 0,
         overdueCount: 0,
-        auditDeals: [] as any[],
+        auditDeals: [],
       };
     }
 
@@ -1119,8 +1285,8 @@ export async function uploadCrmExcelAction(
 
     // 3. Upsert SalesManagerScorecard for each system Sales Manager (SATIS_MUDURU)
     for (const sm of Object.values(managerCrmMap)) {
-      const smTotalDeals = (sm as any).totalDeals || sm.auditDeals.length;
-      const smIssueCount = sm.auditDeals.filter((d: any) => d.issues && d.issues.length > 0).length;
+      const smTotalDeals = sm.auditDeals.length;
+      const smIssueCount = sm.auditDeals.filter((d) => d.issues && d.issues.length > 0).length;
       const crmHealthScore = smTotalDeals === 0 ? 100 : Math.max(0, Math.round(((smTotalDeals - smIssueCount) / smTotalDeals) * 100));
       const overall = Math.round((crmHealthScore * 0.4 + 60) * 100) / 100;
 
@@ -1187,13 +1353,22 @@ export async function uploadCrmExcelAction(
   }
 }
 
-export async function getManagerScorecardsAction(fiscalYear: number, quarter: number, weekNumber: number) {
+export async function getManagerScorecardsAction(fiscalYear: number, quarters: number[] | number, weekNumber: number) {
   const session = await auth();
   if (!session?.user) {
     throw new Error("Oturum açık değil.");
   }
 
-  const period = await ensureFiscalPeriod(fiscalYear, quarter);
+  const list = Array.isArray(quarters) ? quarters : [quarters];
+  const validQuarters = Array.from(
+    new Set(list.filter((q) => Number.isInteger(q) && q >= 1 && q <= 4))
+  ).sort((a, b) => a - b);
+  const selectedQuarters = validQuarters.length > 0 ? validQuarters : [1];
+
+  const periods = await Promise.all(
+    selectedQuarters.map((quarter) => ensureFiscalPeriod(fiscalYear, quarter))
+  );
+  const periodIds = periods.map((period) => period.id);
   const isDirector = session.user.role === "DIREKTOR";
 
   if (!prisma.salesManagerScorecard) {
@@ -1202,7 +1377,7 @@ export async function getManagerScorecardsAction(fiscalYear: number, quarter: nu
 
   const scorecards = await prisma.salesManagerScorecard.findMany({
     where: {
-      fiscalPeriodId: period.id,
+      fiscalPeriodId: { in: periodIds },
       weekNumber,
       user: {
         role: "SATIS_MUDURU",
@@ -1230,13 +1405,22 @@ export async function getManagerScorecardsAction(fiscalYear: number, quarter: nu
   }));
 }
 
-export async function getVendorScorecardsAction(fiscalYear: number, quarter: number, weekNumber: number) {
+export async function getVendorScorecardsAction(fiscalYear: number, quarters: number[] | number, weekNumber: number) {
   const session = await auth();
   if (!session?.user) {
     throw new Error("Oturum açık değil.");
   }
 
-  const period = await ensureFiscalPeriod(fiscalYear, quarter);
+  const list = Array.isArray(quarters) ? quarters : [quarters];
+  const validQuarters = Array.from(
+    new Set(list.filter((q) => Number.isInteger(q) && q >= 1 && q <= 4))
+  ).sort((a, b) => a - b);
+  const selectedQuarters = validQuarters.length > 0 ? validQuarters : [1];
+
+  const periods = await Promise.all(
+    selectedQuarters.map((quarter) => ensureFiscalPeriod(fiscalYear, quarter))
+  );
+  const periodIds = periods.map((period) => period.id);
   const isDirector = session.user.role === "DIREKTOR";
   const accessibleVendorIds = await getAccessibleVendorIds(session.user);
 
@@ -1256,7 +1440,7 @@ export async function getVendorScorecardsAction(fiscalYear: number, quarter: num
 
   const scorecards = await prisma.vendorScorecard.findMany({
     where: {
-      fiscalPeriodId: period.id,
+      fiscalPeriodId: { in: periodIds },
       weekNumber,
       ...(isDirector
         ? {}

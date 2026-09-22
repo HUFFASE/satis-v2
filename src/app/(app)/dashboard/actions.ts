@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
 import { getAccessibleVendorIds } from "@/lib/scope";
-import { getFiscalContext } from "@/lib/fiscal";
+import { getFiscalContext, hasMixedFiscalPeriods, isFiscalPeriodClosed } from "@/lib/fiscal";
 import { ensureFiscalPeriod } from "@/lib/fiscal-db";
 import { getLatestBacklogSnapshots } from "@/lib/backlog";
 import { actualDisplayGpTotal, actualDisplayNsbTotal } from "@/lib/monthly";
@@ -39,17 +39,30 @@ function enrichMetrics(metrics: ReturnType<typeof emptyMetrics>) {
   };
 }
 
-export async function getDashboardData(quarter?: number) {
+function normalizeQuarters(quarters?: number[] | number): number[] {
+  if (!quarters) return [];
+  const list = Array.isArray(quarters) ? quarters : [quarters];
+  const valid = Array.from(new Set(list.filter((q) => Number.isInteger(q) && q >= 1 && q <= 4))).sort((a, b) => a - b);
+  return valid;
+}
+
+export async function getDashboardData(quarters?: number[] | number, fiscalYearParam?: number) {
   const session = await auth();
   if (!session?.user) {
     redirect("/login");
   }
 
   const current = getFiscalContext(new Date());
-  const selectedQuarter = quarter && Number.isInteger(quarter) && quarter >= 1 && quarter <= 4 ? quarter : current.quarter;
-  const isCurrentQuarter = selectedQuarter === current.quarter;
+  const fiscalYear = fiscalYearParam ?? current.fiscalYear;
+  const parsedQuarters = normalizeQuarters(quarters);
+  const selectedQuarters = parsedQuarters.length > 0 ? parsedQuarters : [current.quarter];
+
   const accessibleVendorIds = await getAccessibleVendorIds(session.user);
-  const selectedPeriod = await ensureFiscalPeriod(current.fiscalYear, selectedQuarter);
+  const periods = await Promise.all(
+    selectedQuarters.map((quarter) => ensureFiscalPeriod(fiscalYear, quarter))
+  );
+  const periodIds = periods.map((period) => period.id);
+  const periodIdByQuarter = new Map(periods.map((period) => [period.quarter, period.id]));
 
   const vendors = await prisma.vendor.findMany({
     where: {
@@ -69,58 +82,177 @@ export async function getDashboardData(quarter?: number) {
     orderBy: { name: "asc" },
   });
 
-  const [targets, activeForecasts, actualRows, trendRows] = await Promise.all([
+  const isMixedPeriods = hasMixedFiscalPeriods(periods, current);
+  const closedPeriods = periods.filter((p) => isFiscalPeriodClosed(p, current));
+  const openPeriods = periods.filter((p) => !isFiscalPeriodClosed(p, current));
+
+  const [targets, activeForecasts, actualRows, trendRows, closings] = await Promise.all([
     prisma.target.findMany({
       where: {
         vendorId: { in: accessibleVendorIds },
-        fiscalPeriodId: selectedPeriod.id,
+        fiscalPeriodId: { in: periodIds },
       },
     }),
     prisma.forecast.findMany({
       where: {
         vendorId: { in: accessibleVendorIds },
-        fiscalPeriodId: selectedPeriod.id,
+        fiscalPeriodId: { in: periodIds },
         isActive: true,
       },
     }),
     prisma.actual.findMany({
       where: {
         vendorId: { in: accessibleVendorIds },
-        fiscalPeriodId: selectedPeriod.id,
-        ...(isCurrentQuarter ? { weekNumber: { lte: current.weekInQuarter } } : {}),
+        fiscalPeriodId: { in: periodIds },
       },
     }),
-    // Haftalık trend: aktif olmayan versiyonlar dahil değil, her hafta o haftanın
-    // yürürlükteki forecast'i olarak okunur.
+    // Haftalık trend: seçili çeyrekler ve haftalar bazında gruplama
     prisma.forecast.groupBy({
-      by: ["weekNumber"],
+      by: ["fiscalPeriodId", "weekNumber"],
       where: {
         vendorId: { in: accessibleVendorIds },
-        fiscalPeriodId: selectedPeriod.id,
+        fiscalPeriodId: { in: periodIds },
+        isActive: true,
       },
       _sum: { revenue: true, gp: true },
       _count: { _all: true },
     }),
+    prisma.closing.findMany({
+      where: {
+        vendorId: { in: accessibleVendorIds },
+        fiscalPeriodId: { in: periodIds },
+      },
+    }),
   ]);
 
-  const targetMap = new Map(targets.map((target) => [target.vendorId, target]));
-  const activeForecastMap = new Map(activeForecasts.map((forecast) => [forecast.vendorId, forecast]));
-  const latestActualMap = getLatestBacklogSnapshots(actualRows, isCurrentQuarter ? current.weekInQuarter : undefined);
+  // Satıcı bazında toplam hedefler
+  const targetSumsByVendor = new Map<string, { revenue: number; gp: number; count: number }>();
+  for (const target of targets) {
+    const existing = targetSumsByVendor.get(target.vendorId) ?? { revenue: 0, gp: 0, count: 0 };
+    existing.revenue += Number(target.revenue);
+    existing.gp += Number(target.gp);
+    existing.count += 1;
+    targetSumsByVendor.set(target.vendorId, existing);
+  }
 
-  // Geçmiş çeyreklerde 13 haftanın tamamı, içinde bulunulan çeyrekte yalnızca
-  // yaşanmış haftalar gösterilir; aksi halde çizgi gelecek haftalarda sıfıra düşer.
-  const lastTrendWeek = isCurrentQuarter ? Math.min(13, Math.max(1, current.weekInQuarter)) : 13;
-  const trendMap = new Map(trendRows.map((row) => [row.weekNumber, row]));
-  const weeklyTrend = Array.from({ length: lastTrendWeek }, (_, index) => {
-    const weekNumber = index + 1;
-    const row = trendMap.get(weekNumber);
-    return {
-      weekNumber,
-      revenue: row?._sum.revenue ? Number(row._sum.revenue) : 0,
-      gp: row?._sum.gp ? Number(row._sum.gp) : 0,
-      vendorCount: row?._count._all ?? 0,
-    };
-  });
+  // Satıcı ve dönem anahtarlı map'ler
+  const metricKey = (vendorId: string, fiscalPeriodId: string) => `${vendorId}:${fiscalPeriodId}`;
+  const forecastByVendorPeriod = new Map(
+    activeForecasts.map((f) => [metricKey(f.vendorId, f.fiscalPeriodId), f])
+  );
+  const closingByVendorPeriod = new Map(
+    closings.map((c) => [metricKey(c.vendorId, c.fiscalPeriodId), c])
+  );
+
+  // Satıcı bazında forecast/kapanış rakamları:
+  // Eğer hem kapalı hem açık çeyrekler seçildiyse; kapalı çeyreklerde varsa kapanış (yoksa forecast), açık çeyreklerde forecast toplanır.
+  const forecastSumsByVendor = new Map<string, { revenue: number; gp: number; count: number }>();
+
+  for (const vendor of vendors) {
+    const sum = { revenue: 0, gp: 0, count: 0 };
+
+    for (const period of periods) {
+      const key = metricKey(vendor.id, period.id);
+      const isClosed = isFiscalPeriodClosed(period, current);
+
+      if (isMixedPeriods) {
+        if (isClosed) {
+          const closing = closingByVendorPeriod.get(key);
+          if (closing && (closing.revenue !== null || closing.gp !== null)) {
+            sum.revenue += Number(closing.revenue ?? 0);
+            sum.gp += Number(closing.gp ?? 0);
+            sum.count += 1;
+          } else {
+            const forecast = forecastByVendorPeriod.get(key);
+            if (forecast) {
+              sum.revenue += Number(forecast.revenue);
+              sum.gp += Number(forecast.gp);
+              sum.count += 1;
+            }
+          }
+        } else {
+          // Açık çeyrek: forecast kullanılır
+          const forecast = forecastByVendorPeriod.get(key);
+          if (forecast) {
+            sum.revenue += Number(forecast.revenue);
+            sum.gp += Number(forecast.gp);
+            sum.count += 1;
+          }
+        }
+      } else {
+        // Tek tür (tamamı açık veya tek çeyrek) - standart aktif forecast
+        const forecast = forecastByVendorPeriod.get(key);
+        if (forecast) {
+          sum.revenue += Number(forecast.revenue);
+          sum.gp += Number(forecast.gp);
+          sum.count += 1;
+        }
+      }
+    }
+
+    forecastSumsByVendor.set(vendor.id, sum);
+  }
+
+  // Satıcı ve dönem bazında en güncel backlog
+  // Kapanmış çeyreklerin backlogları artık satışa (kapanış/faturalanan) döndüğü için
+  // sadece AÇIK (cari veya gelecek) çeyreklerin bekleyen backlog'u hesaplanır.
+  const backlogSumsByVendor = new Map<string, { revenue: number; gp: number }>();
+  for (const period of periods) {
+    if (isFiscalPeriodClosed(period, current)) {
+      // Kapalı çeyreklerin backlog'u satışa dönmüştür, bekleyen backlog olarak mükerrer sayılmaz
+      continue;
+    }
+    const isThisCurrentQuarter = period.fiscalYear === current.fiscalYear && period.quarter === current.quarter;
+    const periodActuals = actualRows.filter((row) => row.fiscalPeriodId === period.id);
+    const latestActualMap = getLatestBacklogSnapshots(
+      periodActuals,
+      isThisCurrentQuarter ? current.weekInQuarter : undefined
+    );
+
+    for (const vendor of vendors) {
+      const actual = latestActualMap.get(`${vendor.id}:${period.id}`);
+      if (actual) {
+        const existing = backlogSumsByVendor.get(vendor.id) ?? { revenue: 0, gp: 0 };
+        existing.revenue += actualDisplayNsbTotal(actual);
+        existing.gp += actualDisplayGpTotal(actual);
+        backlogSumsByVendor.set(vendor.id, existing);
+      }
+    }
+  }
+
+  // Haftalık trend noktalarını sıralı oluştur
+  const trendKey = (periodId: string, week: number) => `${periodId}:${week}`;
+  const trendRowMap = new Map(trendRows.map((row) => [trendKey(row.fiscalPeriodId, row.weekNumber), row]));
+
+  const weeklyTrend: Array<{
+    quarter: number;
+    weekNumber: number;
+    label: string;
+    tooltipLabel: string;
+    revenue: number;
+    gp: number;
+    vendorCount: number;
+  }> = [];
+
+  for (const quarter of selectedQuarters) {
+    const periodId = periodIdByQuarter.get(quarter);
+    if (!periodId) continue;
+    const isThisCurrentQuarter = fiscalYear === current.fiscalYear && quarter === current.quarter;
+    const lastWeek = isThisCurrentQuarter ? Math.min(13, Math.max(1, current.weekInQuarter)) : 13;
+
+    for (let w = 1; w <= lastWeek; w++) {
+      const row = trendRowMap.get(trendKey(periodId, w));
+      weeklyTrend.push({
+        quarter,
+        weekNumber: w,
+        label: selectedQuarters.length > 1 ? `Q${quarter}H${w}` : `H${w}`,
+        tooltipLabel: `Q${quarter} Hafta ${w}`,
+        revenue: row?._sum.revenue ? Number(row._sum.revenue) : 0,
+        gp: row?._sum.gp ? Number(row._sum.gp) : 0,
+        vendorCount: row?._count._all ?? 0,
+      });
+    }
+  }
 
   const managerMap = new Map<
     string,
@@ -143,16 +275,17 @@ export async function getDashboardData(quarter?: number) {
   const currentTotals = emptyMetrics();
 
   for (const vendor of vendors) {
-    const target = targetMap.get(vendor.id);
-    const forecast = activeForecastMap.get(vendor.id);
-    const actual = latestActualMap.get(`${vendor.id}:${selectedPeriod.id}`);
+    const targetData = targetSumsByVendor.get(vendor.id);
+    const forecastData = forecastSumsByVendor.get(vendor.id);
+    const backlogData = backlogSumsByVendor.get(vendor.id);
+
     const currentMetrics = {
-      targetRevenue: target ? Number(target.revenue) : 0,
-      targetGp: target ? Number(target.gp) : 0,
-      forecastRevenue: forecast ? Number(forecast.revenue) : 0,
-      forecastGp: forecast ? Number(forecast.gp) : 0,
-      backlogRevenue: actual ? actualDisplayNsbTotal(actual) : 0,
-      backlogGp: actual ? actualDisplayGpTotal(actual) : 0,
+      targetRevenue: targetData ? targetData.revenue : 0,
+      targetGp: targetData ? targetData.gp : 0,
+      forecastRevenue: forecastData ? forecastData.revenue : 0,
+      forecastGp: forecastData ? forecastData.gp : 0,
+      backlogRevenue: backlogData ? backlogData.revenue : 0,
+      backlogGp: backlogData ? backlogData.gp : 0,
     };
 
     const groupId = vendor.managerId ?? "unassigned";
@@ -172,15 +305,15 @@ export async function getDashboardData(quarter?: number) {
       currentTotals[key] += currentMetrics[key];
     }
 
-    if (forecast) group.forecastedCount += 1;
-    if (target) group.targetCount += 1;
+    if (forecastData && forecastData.count > 0) group.forecastedCount += 1;
+    if (targetData && targetData.count > 0) group.targetCount += 1;
 
     group.vendors.push({
       vendorId: vendor.id,
       vendorName: vendor.name,
       current: enrichMetrics(currentMetrics),
-      hasForecast: Boolean(forecast),
-      hasTarget: Boolean(target),
+      hasForecast: Boolean(forecastData && forecastData.count > 0),
+      hasTarget: Boolean(targetData && targetData.count > 0),
     });
     managerMap.set(groupId, group);
   }
@@ -203,7 +336,7 @@ export async function getDashboardData(quarter?: number) {
             severity: "high",
             managerName: manager.managerName,
             vendorName: vendor.vendorName,
-            detail: "Mevcut dönem için aktif forecast girilmemiş.",
+            detail: "Seçili dönem için aktif forecast girilmemiş.",
           });
         }
         if (vendor.hasTarget && vendor.current.gpAchievement > 0 && vendor.current.gpAchievement < 75) {
@@ -246,8 +379,6 @@ export async function getDashboardData(quarter?: number) {
       })
     );
 
-  // Kesme işlemi önceliğe göre sıralandıktan sonra yapılır; aksi halde listenin
-  // sonundaki "high" bir uyarı, baştaki "low" uyarılar yüzünden düşebiliyordu.
   const severityRank: Record<string, number> = { high: 0, medium: 1, low: 2 };
   const sortedAttentionItems = [...attentionItems].sort(
     (a, b) => (severityRank[a.severity] ?? 3) - (severityRank[b.severity] ?? 3)
@@ -258,9 +389,11 @@ export async function getDashboardData(quarter?: number) {
     attentionTotalCount: sortedAttentionItems.length,
     weeklyTrend,
     currentContext: current,
-    selectedFiscalYear: current.fiscalYear,
-    selectedQuarter,
-    isCurrentQuarter,
+    selectedFiscalYear: fiscalYear,
+    selectedQuarters,
+    isMixedPeriods,
+    closedQuarters: closedPeriods.map((p) => p.quarter),
+    openQuarters: openPeriods.map((p) => p.quarter),
     user: {
       role: session.user.role,
       name: session.user.name,

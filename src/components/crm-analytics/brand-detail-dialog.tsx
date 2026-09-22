@@ -1,5 +1,4 @@
 "use client";
-
 import React, { useState, useMemo } from "react";
 import {
   Dialog,
@@ -11,7 +10,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Search, ArrowUpDown, ArrowUp, ArrowDown, Building2, Coins, Calculator } from "lucide-react";
+import { Search, ArrowUpDown, ArrowUp, ArrowDown, Building2,  } from "lucide-react";
 import { CrmAuditDeal, calculateOpportunityMultiplier } from "@/lib/crm/tdsynnex-parser";
 
 /**
@@ -57,7 +56,7 @@ export function BrandDetailDialog({
     if (!crmAuditJson) return [];
     try {
       return JSON.parse(crmAuditJson);
-    } catch (e) {
+    } catch {
       return [];
     }
   }, [crmAuditJson]);
@@ -78,12 +77,12 @@ export function BrandDetailDialog({
   const sortedDeals = useMemo(() => {
     return searchFiltered.slice().sort((a, b) => {
       // `multiplier` kayıtlı veride bulunmuyor; hesaplanarak sıralanır.
-      let aVal: any =
-        sortField === "multiplier" ? dealMultiplier(a) : (a as any)[sortField];
-      let bVal: any =
-        sortField === "multiplier" ? dealMultiplier(b) : (b as any)[sortField];
+      let aVal =
+        sortField === "multiplier" ? dealMultiplier(a) : a[sortField];
+      let bVal =
+        sortField === "multiplier" ? dealMultiplier(b) : b[sortField];
 
-      if (typeof aVal === "string") {
+      if (typeof aVal === "string" && typeof bVal === "string") {
         aVal = aVal.toLowerCase();
         bVal = (bVal || "").toLowerCase();
       }

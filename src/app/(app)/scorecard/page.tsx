@@ -1,5 +1,4 @@
 "use client";
-
 import React, { useEffect, useState, useCallback } from "react";
 import { getCurrentFiscalContext } from "@/lib/fiscal";
 import { Button } from "@/components/ui/button";
@@ -13,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuarterMultiSelect } from "@/components/ui/quarter-multi-select";
 import {
   Table,
   TableBody,
@@ -37,9 +37,6 @@ import {
   Loader2,
   Upload,
   Building2,
-  Coins,
-  CalendarX,
-  UserCheck,
   ShieldAlert,
 } from "lucide-react";
 import { CrmAuditDialog } from "@/components/scorecard/crm-audit-dialog";
@@ -111,7 +108,7 @@ function formatTRY(value: number) {
 export default function ScorecardPage() {
   const currentContext = getCurrentFiscalContext();
   const [fiscalYear, setFiscalYear] = useState<number>(currentContext.fiscalYear);
-  const [quarter, setQuarter] = useState<number>(currentContext.quarter);
+  const [selectedQuarters, setSelectedQuarters] = useState<number[]>([currentContext.quarter]);
   const [weekNumber, setWeekNumber] = useState<number>(currentContext.weekInQuarter);
 
   const [activeTab, setActiveTab] = useState<"vendors" | "managers">("vendors");
@@ -131,22 +128,22 @@ export default function ScorecardPage() {
 
   const allAuditDeals = React.useMemo(() => {
     const dealMap = new Map<string, CrmAuditDeal>();
-    managerScorecards.forEach((m: any) => {
+    managerScorecards.forEach((m) => {
       if (m.crmAuditJson) {
         try {
           const parsed: CrmAuditDeal[] = JSON.parse(m.crmAuditJson);
           parsed.forEach((d) => dealMap.set(d.code, d));
-        } catch (e) {}
+        } catch {}
       }
     });
-    vendorScorecards.forEach((v: any) => {
+    vendorScorecards.forEach((v) => {
       if (v.crmAuditJson) {
         try {
           const parsed: CrmAuditDeal[] = JSON.parse(v.crmAuditJson);
           parsed.forEach((d) => {
             if (!dealMap.has(d.code)) dealMap.set(d.code, d);
           });
-        } catch (e) {}
+        } catch {}
       }
     });
     return Array.from(dealMap.values());
@@ -172,9 +169,9 @@ export default function ScorecardPage() {
     setIsLoading(true);
     try {
       const [mgrRes, vndRes, profileRes] = await Promise.all([
-        getManagerScorecardsAction(fiscalYear, quarter, weekNumber),
-        getVendorScorecardsAction(fiscalYear, quarter, weekNumber),
-        getManagerProfileCards(fiscalYear, quarter, weekNumber),
+        getManagerScorecardsAction(fiscalYear, selectedQuarters, weekNumber),
+        getVendorScorecardsAction(fiscalYear, selectedQuarters, weekNumber),
+        getManagerProfileCards(fiscalYear, selectedQuarters, weekNumber),
       ]);
       setManagerScorecards(mgrRes);
       setVendorScorecards(vndRes);
@@ -184,14 +181,16 @@ export default function ScorecardPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [fiscalYear, quarter, weekNumber]);
+  }, [fiscalYear, selectedQuarters, weekNumber]);
+
+  const quarter = selectedQuarters[0] ?? currentContext.quarter;
 
   useEffect(() => {
     let active = true;
     Promise.all([
-      getManagerScorecardsAction(fiscalYear, quarter, weekNumber),
-      getVendorScorecardsAction(fiscalYear, quarter, weekNumber),
-      getManagerProfileCards(fiscalYear, quarter, weekNumber),
+      getManagerScorecardsAction(fiscalYear, selectedQuarters, weekNumber),
+      getVendorScorecardsAction(fiscalYear, selectedQuarters, weekNumber),
+      getManagerProfileCards(fiscalYear, selectedQuarters, weekNumber),
     ])
       .then(([mgrRes, vndRes, profileRes]) => {
         if (!active) return;
@@ -210,7 +209,7 @@ export default function ScorecardPage() {
     return () => {
       active = false;
     };
-  }, [fiscalYear, quarter, weekNumber]);
+  }, [fiscalYear, selectedQuarters, weekNumber]);
 
   // Vendor Mapping Modal States
   const [unmatchedBrands, setUnmatchedBrands] = useState<UnmatchedBrand[]>([]);
@@ -280,7 +279,6 @@ export default function ScorecardPage() {
 
   const handleConfirmMappings = async (
     mappings: { excelBrand: string; targetVendorId: string }[],
-    skipRemaining?: boolean
   ) => {
     await executeUploadWithMappings(mappings, true);
   };
@@ -329,7 +327,7 @@ export default function ScorecardPage() {
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
             <span>
-              <strong>Kur Uyarısı:</strong> Seçilen dönemde <strong>{totalTryDealCount || lastTrySummary?.dealCount} adet TL (TRY)</strong> fırsat tespit edildi. Toplam TL Ham Ciro: <strong>{formatTRY(totalTryRawPipeline || lastTrySummary?.rawPipeline || 0)}</strong>. Bu işler USD cinsinden ana pipeline'a dahil edilmemiş, ayrıştırılmıştır.
+              <strong>Kur Uyarısı:</strong> Seçilen dönemde <strong>{totalTryDealCount || lastTrySummary?.dealCount} adet TL (TRY)</strong> fırsat tespit edildi. Toplam TL Ham Ciro: <strong>{formatTRY(totalTryRawPipeline || lastTrySummary?.rawPipeline || 0)}</strong>. Bu işler USD cinsinden ana pipeline&apos;a dahil edilmemiş, ayrıştırılmıştır.
             </span>
           </div>
           {lastTrySummary && (
@@ -376,18 +374,12 @@ export default function ScorecardPage() {
 
             <span className="text-slate-300">|</span>
 
-            <Select value={quarter.toString()} onValueChange={(v) => v && setQuarter(parseInt(v, 10))}>
-              <SelectTrigger className="h-8 w-24 border-0 text-xs font-semibold focus:ring-0">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-white border-slate-200">
-                {[1, 2, 3, 4].map((q) => (
-                  <SelectItem key={q} value={q.toString()} className="text-xs">
-                    Q{q} {q === currentContext.quarter && fiscalYear === currentContext.fiscalYear ? "(Aktif)" : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <QuarterMultiSelect
+              selectedQuarters={selectedQuarters}
+              onChange={setSelectedQuarters}
+              disabled={isLoading}
+              allowAllShortcut
+            />
 
             <span className="text-slate-300">|</span>
 
@@ -439,7 +431,7 @@ export default function ScorecardPage() {
             <h3 className="mt-1 font-mono text-xl font-bold text-amber-900 dark:text-amber-300">
               {formatTRY(totalTryRawPipeline)}
             </h3>
-            <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">{totalTryDealCount} adet TL fırsat (USD'den muaf)</p>
+            <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">{totalTryDealCount} adet TL fırsat (USD&apos;den muaf)</p>
           </div>
         )}
 

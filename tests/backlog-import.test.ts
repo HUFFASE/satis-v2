@@ -1,18 +1,30 @@
 import { describe, it, expect } from "vitest";
 import * as XLSX from "xlsx";
-import path from "node:path";
 import {
   buildBacklogColumnMappings,
   classifyBacklogColumn,
   parseMonthlyDetailsRows,
 } from "../src/lib/backlog/parse-monthly-details";
 
-const SAMPLE_FILE = path.join(process.cwd(), "FY26_Q3-Backlog_17072026_ALL_V3.xlsx");
-
+// Synthetic workbook: no dependency on a private sales export on disk.
 function loadMonthlyDetailsRows() {
-  const workbook = XLSX.readFile(SAMPLE_FILE);
-  const sheet = workbook.Sheets["Monthly Details"];
-  return XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+  const rows = [
+    ["Synthetic backlog fixture"],
+    ["", "", "", "Sales Manager", "Vendor", "", "",
+      "Jun NSB Invoiced", "Jun GP Invoiced", "Jun NSB Backlog", "Jun GP Backlog",
+      "Jul NSB Invoiced", "Jul GP Invoiced", "Jul NSB\r\nBacklog", "Jul GP Backlog",
+      "Aug NSB Invoiced", "Aug GP Invoiced", "Aug NSB Backlog", "Aug GP Backlog",
+      "", "Q3 NSB Inv. + Backl."],
+    ["", "", "", "Test Manager", "ADOBE", "", "",
+      719488, 100, 0, 0, 17054, 20, 91899, 30, 0, 0, 538, 10, "", 828979],
+    ["", "", "", "Test Manager", "ACRONIS", "", "",
+      30056, 500, 0, 0, 0, 0, 25310, 600, 0, 0, 0, 0, "", 55366],
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "Monthly Details");
+  const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+  const reloaded = XLSX.read(buffer, { type: "buffer" });
+  return XLSX.utils.sheet_to_json<unknown[]>(reloaded.Sheets["Monthly Details"], {
     header: 1,
     defval: "",
     raw: false,

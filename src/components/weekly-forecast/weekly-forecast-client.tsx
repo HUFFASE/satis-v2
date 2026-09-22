@@ -511,19 +511,25 @@ export function WeeklyForecastClient() {
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-500">Çeyrek:</span>
-            <Select value={quarter.toString()} onValueChange={(value) => setQuarter(Number(value))}>
-              <SelectTrigger className="h-8 w-20 border-slate-200 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="border-slate-200 bg-white">
-                {[1, 2, 3, 4].map((q) => (
-                  <SelectItem key={q} value={q.toString()} className="text-xs">
-                    Q{q}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white p-1 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+              {[1, 2, 3, 4].map((q) => (
+                <Button
+                  key={q}
+                  type="button"
+                  size="sm"
+                  variant={quarter === q ? "default" : "ghost"}
+                  onClick={() => setQuarter(q)}
+                  className={cn(
+                    "h-8 px-3 text-xs font-semibold transition-colors",
+                    quarter === q
+                      ? "bg-[#2E5A43] text-white hover:bg-[#244936]"
+                      : "text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                  )}
+                >
+                  Q{q}
+                </Button>
+              ))}
+            </div>
           </div>
 
           <div className="flex items-center gap-2 border-l border-slate-200 pl-3 dark:border-slate-800">
